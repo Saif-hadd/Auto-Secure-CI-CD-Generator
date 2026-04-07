@@ -1,0 +1,19 @@
+{
+  "name": "auto-secure-cicd-backend",
+  "version": "1.0.0",
+  "description": "Backend API for Auto Secure CI/CD Generator",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "pg": "^8.11.3",
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "js-yaml": "^4.1.0",
+    "axios": "^1.6.2"
+  }
+}
