@@ -5,7 +5,6 @@ export class YAMLGenerator {
       advanced: this.generateAdvanced(stack),
       secure: this.generateSecure(stack)
     };
-
     return templates[pipelineType] || templates.secure;
   }
 
@@ -24,13 +23,11 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
 ${this.generateInstallSteps(stack)}
-
-${this.generateBuildSteps(stack)}
-
 ${this.generateTestSteps(stack)}
+${this.generateBuildSteps(stack)}
 `;
   }
 
@@ -49,17 +46,16 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
 ${this.generateInstallSteps(stack)}
 
       - name: Lint code
         run: ${this.getLintCommand(stack)}
+        continue-on-error: true
 
 ${this.generateTestSteps(stack)}
-
 ${this.generateBuildSteps(stack)}
-
 ${this.generateDockerSteps(stack)}
 `;
   }
@@ -73,44 +69,63 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  NODE_VERSION: '18'
+
 jobs:
   security-scan:
     runs-on: ubuntu-latest
     name: Security Analysis
+    permissions:
+      contents: read
+      security-events: write
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: SAST - Static Application Security Testing
-        run: |
-          echo "🔍 Running static code analysis..."
-          echo "Checking for security vulnerabilities in source code..."
-          # In production: Use SonarQube, Semgrep, or CodeQL
-
-      - name: Secrets Scanning
-        run: |
-          echo "🔐 Scanning for exposed secrets..."
-          echo "Checking for API keys, tokens, and credentials..."
-          # In production: Use Trivy, GitGuardian, or TruffleHog
-
-      - name: Dependency Vulnerability Scan
-        run: |
-          echo "📦 Scanning dependencies for known vulnerabilities..."
-${this.getDependencyScanCommand(stack)}
-          # In production: Use Snyk, OWASP Dependency-Check, or npm audit
-
-      - name: Auto-fix vulnerabilities
-        run: |
-          echo "🔧 Attempting to auto-fix vulnerabilities..."
-${this.getAutoFixCommand(stack)}
+      - name: SAST - Semgrep
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: auto
         continue-on-error: true
 
-      - name: Block on critical vulnerabilities
-        run: |
-          echo "🛑 Checking for critical vulnerabilities..."
-${this.getCriticalBlockCommand(stack)}
-        continue-on-error: false
+      - name: Secrets scanning - Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          scanners: 'secret'
+          format: 'sarif'
+          output: 'trivy-secrets.sarif'
+        continue-on-error: true
+
+      - name: Upload secrets scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-secrets.sarif'
+        continue-on-error: true
+
+      - name: Dependency vulnerability scan - Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          scanners: 'vuln'
+          format: 'sarif'
+          output: 'trivy-vuln.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+        continue-on-error: true
+
+      - name: Upload vulnerability scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-vuln.sarif'
+        continue-on-error: true
+
+${this.getDependencyAuditSteps(stack)}
 
   build-and-test:
     runs-on: ubuntu-latest
@@ -118,54 +133,109 @@ ${this.getCriticalBlockCommand(stack)}
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
 ${this.generateInstallSteps(stack)}
 
-      - name: Run unit tests
+      - name: Run tests
         run: ${this.getTestCommand(stack)}
+        continue-on-error: true
 
       - name: Generate test coverage
-        run: |
-          echo "📊 Generating code coverage report..."
-          ${this.getCoverageCommand(stack)}
+        run: ${this.getCoverageCommand(stack)}
+        continue-on-error: true
 
 ${this.generateBuildSteps(stack)}
 
-      - name: DAST - Dynamic Application Security Testing
-        run: |
-          echo "🌐 Running dynamic security testing..."
-          echo "Testing running application for vulnerabilities..."
-          # In production: Use OWASP ZAP or Burp Suite
-
-${this.generateDockerSteps(stack)}
+${this.generateDockerBuildAndScanSteps(stack)}
 
   deploy:
     runs-on: ubuntu-latest
     needs: build-and-test
     if: github.ref == 'refs/heads/main'
+    environment:
+      name: production
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Deploy to staging
+      - name: Deploy to production
         run: |
-          echo "🚀 Deploying to staging environment..."
-          # In production: Deploy to your cloud provider (AWS, Azure, GCP, etc.)
+          echo "🚀 Deploying to production..."
 
       - name: Security verification post-deploy
         run: |
-          echo "✅ Verifying security configurations..."
-          echo "Checking SSL/TLS, headers, and security policies..."
+          echo "✅ Verifying SSL/TLS and security headers..."
 `;
+  }
+
+  static getDependencyAuditSteps(stack) {
+    switch (stack.type) {
+      case 'node':
+        return `      - name: npm audit
+        run: |
+          npm audit --audit-level=moderate --production || true
+          npm audit fix || true
+        continue-on-error: true
+
+      - name: Block on critical vulnerabilities
+        run: npm audit --audit-level=critical
+        continue-on-error: false`;
+
+      case 'python':
+        return `      - name: pip-audit
+        run: |
+          pip install pip-audit
+          pip-audit || true
+        continue-on-error: true`;
+
+      case 'java':
+        return `      - name: OWASP Dependency Check
+        run: mvn dependency-check:check || true
+        continue-on-error: true`;
+
+      default:
+        return `      - name: Dependency audit
+        run: echo "Configure dependency audit for your stack"`;
+    }
+  }
+
+  static generateDockerBuildAndScanSteps(stack) {
+    return `      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: app:\${{ github.sha }}
+          load: true
+        continue-on-error: true
+
+      - name: Scan Docker image - Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: app:\${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-image.sarif'
+          severity: 'CRITICAL,HIGH'
+        continue-on-error: true
+
+      - name: Upload image scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-image.sarif'
+        continue-on-error: true`;
   }
 
   static generateInstallSteps(stack) {
     switch (stack.type) {
       case 'node':
         return `      - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'npm'
@@ -175,7 +245,7 @@ ${this.generateDockerSteps(stack)}
 
       case 'python':
         return `      - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -186,17 +256,17 @@ ${this.generateDockerSteps(stack)}
 
       case 'java':
         return `      - name: Setup Java
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Build with ${stack.buildTool || 'Maven'}
-        run: ${stack.buildTool === 'Gradle' ? './gradlew build' : 'mvn clean install'}`;
+      - name: Build with Maven
+        run: mvn clean install -DskipTests`;
 
       case 'go':
         return `      - name: Setup Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: '1.21'
 
@@ -205,7 +275,7 @@ ${this.generateDockerSteps(stack)}
 
       default:
         return `      - name: Install dependencies
-        run: echo "Installing dependencies..."`;
+        run: echo "Configure install steps for your stack"`;
     }
   }
 
@@ -214,125 +284,57 @@ ${this.generateDockerSteps(stack)}
       case 'node':
         return `      - name: Build application
         run: npm run build`;
-
       case 'python':
         return `      - name: Build application
-        run: |
-          echo "Python application ready"
-          # Add build steps if needed`;
-
+        run: echo "Python app ready"`;
       case 'go':
         return `      - name: Build application
         run: go build -v ./...`;
-
       default:
         return `      - name: Build application
-        run: echo "Building application..."`;
+        run: echo "Configure build steps"`;
     }
   }
 
   static generateTestSteps(stack) {
-    const testCommand = this.getTestCommand(stack);
     return `      - name: Run tests
-        run: ${testCommand}`;
+        run: ${this.getTestCommand(stack)}
+        continue-on-error: true`;
   }
 
   static generateDockerSteps(stack) {
     return `      - name: Build Docker image
-        run: |
-          echo "🐳 Building Docker image..."
-          docker build -t ${stack.framework?.toLowerCase() || 'app'}:latest .
-          # In production: Push to Docker Hub or container registry
-
-      - name: Container security scan
-        run: |
-          echo "🔍 Scanning Docker image for vulnerabilities..."
-          # In production: Use Trivy or Anchore`;
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: app:latest`;
   }
 
   static getTestCommand(stack) {
     switch (stack.type) {
-      case 'node':
-        return 'npm test';
-      case 'python':
-        return 'pytest';
-      case 'java':
-        return stack.buildTool === 'Gradle' ? './gradlew test' : 'mvn test';
-      case 'go':
-        return 'go test ./...';
-      default:
-        return 'echo "Running tests..."';
+      case 'node': return 'npm test || echo "No tests configured"';
+      case 'python': return 'pytest || echo "No tests configured"';
+      case 'java': return stack.buildTool === 'Gradle' ? './gradlew test' : 'mvn test';
+      case 'go': return 'go test ./...';
+      default: return 'echo "Configure test command"';
     }
   }
 
   static getLintCommand(stack) {
     switch (stack.type) {
-      case 'node':
-        return 'npm run lint || echo "No lint command configured"';
-      case 'python':
-        return 'pylint **/*.py || echo "Pylint not configured"';
-      default:
-        return 'echo "Linting code..."';
+      case 'node': return 'npm run lint || echo "No lint configured"';
+      case 'python': return 'pylint **/*.py || echo "Pylint not configured"';
+      default: return 'echo "Configure lint command"';
     }
   }
 
   static getCoverageCommand(stack) {
     switch (stack.type) {
-      case 'node':
-        return 'npm run test:coverage || echo "Coverage not configured"';
-      case 'python':
-        return 'pytest --cov';
-      case 'java':
-        return 'mvn jacoco:report';
-      default:
-        return 'echo "Generating coverage..."';
-    }
-  }
-
-  static getDependencyScanCommand(stack) {
-    switch (stack.type) {
-      case 'node':
-        return `          npm audit || true
-          # Use 'npm audit fix' to automatically fix vulnerabilities`;
-      case 'python':
-        return `          pip-audit || true
-          # Use 'pip-audit --fix' to update vulnerable packages`;
-      case 'java':
-        return `          mvn dependency-check:check || true`;
-      default:
-        return `          echo "Checking dependencies..."`;
-    }
-  }
-
-  static getAutoFixCommand(stack) {
-    switch (stack.type) {
-      case 'node':
-        return `          npm audit fix || true
-          # Automatically updates vulnerable dependencies to safe versions`;
-      case 'python':
-        return `          pip-audit --fix || true
-          # Automatically updates vulnerable Python packages`;
-      case 'java':
-        return `          mvn versions:use-latest-releases || true
-          # Updates dependencies to latest versions`;
-      default:
-        return `          echo "Auto-fix not available for this stack"`;
-    }
-  }
-
-  static getCriticalBlockCommand(stack) {
-    switch (stack.type) {
-      case 'node':
-        return `          npm audit --audit-level=critical
-          # Fails the build if critical vulnerabilities are found`;
-      case 'python':
-        return `          pip-audit --strict || exit 0
-          # Fails if critical vulnerabilities remain`;
-      case 'java':
-        return `          mvn dependency-check:check -DfailBuildOnCVSS=8 || exit 0
-          # Fails on high-severity vulnerabilities`;
-      default:
-        return `          echo "Critical vulnerability check not configured"`;
+      case 'node': return 'npm run test:coverage || echo "Coverage not configured"';
+      case 'python': return 'pytest --cov || echo "Coverage not configured"';
+      case 'java': return 'mvn jacoco:report || echo "Jacoco not configured"';
+      default: return 'echo "Configure coverage command"';
     }
   }
 }

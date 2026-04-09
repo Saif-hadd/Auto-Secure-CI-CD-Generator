@@ -142,15 +142,15 @@ export class AutoFixer {
         let updatedLine = line;
 
         if (line.trim().startsWith('USER root')) {
-          updatedLine = line.replace('USER root', 'USER node');
-          changes.push({
-            type: 'dockerfile',
-            issue: 'Running as root user',
-            fix: 'Changed to non-root user',
-            severity: 'medium'
-          });
-          modified = true;
-        }
+  updatedLine = line.replace('USER root', 'USER appuser')
+  changes.push({
+    type: 'dockerfile',
+    issue: 'Running as root user',
+    fix: 'Changed to non-root user (appuser)',
+    severity: 'medium'
+  });
+  modified = true;
+}
 
         if (line.includes('apt-get') && !line.includes('--no-install-recommends')) {
           updatedLine = line.replace('apt-get install', 'apt-get install --no-install-recommends');

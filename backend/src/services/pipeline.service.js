@@ -3,10 +3,18 @@ import { RepoService } from './repo.service.js';
 import { YAMLGenerator } from '../utils/yaml-generator.js';
 import { SecurityService } from './security.service.js';
 import { RemediationService } from './remediation.service.js';
+import { StackDetector } from '../utils/stack-detector.js';
 import axios from 'axios';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import fs from 'fs';
+
+const execAsync = promisify(exec);
 
 export class PipelineService {
   static async generatePipeline(repoId, userId, pipelineType, options = {}) {
+    let tempRepoPath = null;
+
     try {
       const repository = await RepoService.getRepositoryById(repoId, userId);
 
@@ -14,23 +22,51 @@ export class PipelineService {
         throw new Error('Repository not found');
       }
 
-      let stack = repository.stack_detected;
-      if (!stack) {
-        const userResult = await query(
-          'SELECT access_token FROM users WHERE id = $1',
-          [userId]
-        );
+      // ✅ ÉTAPE 1 — Récupérer le token une seule fois
+      const userResult = await query(
+        'SELECT access_token FROM users WHERE id = $1',
+        [userId]
+      );
 
-        if (userResult.rows.length === 0) {
-          throw new Error('User not found');
-        }
-
-        stack = await RepoService.detectTechStack(repoId, userId, userResult.rows[0].access_token);
+      if (userResult.rows.length === 0) {
+        throw new Error('User not found');
       }
 
+      const token = userResult.rows[0].access_token;
+
+      // ✅ ÉTAPE 2 — Cloner le repo en premier
+      let stack = null;
+
+      try {
+        tempRepoPath = `/tmp/repo_${repoId}_${Date.now()}`;
+
+        await execAsync(
+          `git clone --depth=1 https://oauth2:${token}@github.com/${repository.repo_full_name}.git ${tempRepoPath}`,
+          { timeout: 60000 }
+        );
+
+        console.log(`✅ Repo cloned: ${tempRepoPath}`);
+
+        // ✅ ÉTAPE 3 — Détecter le stack depuis le clone local
+        stack = await StackDetector.detectFromLocal(tempRepoPath);
+        console.log(`✅ Stack detected: ${stack.type} / ${stack.framework}`);
+
+      } catch (cloneError) {
+        console.error('❌ Clone failed, fallback to DB/API:', cloneError.message);
+
+        // Fallback — stack depuis la DB ou GitHub API
+        stack = repository.stack_detected;
+
+        if (!stack || stack.type === 'unknown') {
+          stack = await RepoService.detectTechStack(repoId, userId, token);
+        }
+      }
+
+      // ✅ ÉTAPE 4 — Générer le YAML avec le bon stack détecté
       const generatedYAML = YAMLGenerator.generate(stack, pipelineType);
       const securityFeatures = this.extractSecurityFeatures(generatedYAML);
 
+      // ✅ ÉTAPE 5 — Sauvegarder en DB
       const pipelineResult = await query(
         `INSERT INTO pipelines (repo_id, user_id, pipeline_type, generated_yaml, security_features, status)
          VALUES ($1, $2, $3, $4, $5, $6)
@@ -40,7 +76,8 @@ export class PipelineService {
 
       const pipeline = pipelineResult.rows[0];
 
-      const projectPath = options.projectPath || process.cwd();
+      // ✅ ÉTAPE 6 — Scanner le repo cloné (ou cwd en fallback)
+      const projectPath = tempRepoPath || options.projectPath || process.cwd();
       const scannerType = options.scannerType || 'trivy';
 
       try {
@@ -51,33 +88,47 @@ export class PipelineService {
 
         console.log('Security scan completed:', scanResult.summary);
 
+        // Auto-remediation si activée
         if (options.autoRemediate && scanResult.summary.totalVulnerabilities > 0) {
           try {
-            const userResult = await query(
-              'SELECT access_token FROM users WHERE id = $1',
-              [userId]
+            const remediationResult = await RemediationService.runAutoRemediation(
+              pipeline.id,
+              userId,
+              token,
+              projectPath
             );
-
-            if (userResult.rows.length > 0) {
-              const remediationResult = await RemediationService.runAutoRemediation(
-                pipeline.id,
-                userId,
-                userResult.rows[0].access_token,
-                projectPath
-              );
-
-              console.log('Auto-remediation completed:', remediationResult);
-            }
+            console.log('Auto-remediation completed:', remediationResult);
           } catch (remediationError) {
-            console.error('Auto-remediation failed, continuing without it:', remediationError);
+            console.error('Auto-remediation failed:', remediationError);
           }
         }
+
       } catch (scanError) {
-        console.error('Security scan failed, using fallback:', scanError);
+        console.error('Security scan failed, using fallback:', scanError.message);
+      }
+
+      // ✅ ÉTAPE 7 — Cleanup du dossier temporaire
+      if (tempRepoPath && fs.existsSync(tempRepoPath)) {
+        try {
+          await execAsync(`rm -rf ${tempRepoPath}`);
+          console.log('🧹 Temp repo deleted');
+        } catch (cleanError) {
+          console.error('Cleanup failed:', cleanError.message);
+        }
       }
 
       return pipeline;
+
     } catch (error) {
+      // ✅ Cleanup en cas d'erreur aussi
+      if (tempRepoPath && fs.existsSync(tempRepoPath)) {
+        try {
+          await execAsync(`rm -rf ${tempRepoPath}`);
+        } catch (cleanError) {
+          console.error('Cleanup failed:', cleanError.message);
+        }
+      }
+
       console.error('Generate pipeline error:', error);
       throw error;
     }
@@ -98,7 +149,6 @@ export class PipelineService {
         scannerType,
         pipelineId
       });
-
       return scanResult;
     } catch (error) {
       console.error('Run security scan error:', error);
@@ -140,9 +190,7 @@ export class PipelineService {
       try {
         const { data: existingFile } = await axios.get(
           `https://api.github.com/repos/${repo.repo_full_name}/contents/.github/workflows/secure-pipeline.yml`,
-          {
-            headers: { Authorization: `Bearer ${accessToken}` }
-          }
+          { headers: { Authorization: `Bearer ${accessToken}` } }
         );
 
         await axios.put(
@@ -153,9 +201,7 @@ export class PipelineService {
             sha: existingFile.sha,
             branch: repo.default_branch
           },
-          {
-            headers: { Authorization: `Bearer ${accessToken}` }
-          }
+          { headers: { Authorization: `Bearer ${accessToken}` } }
         );
       } catch (error) {
         if (error.response?.status === 404) {
@@ -166,9 +212,7 @@ export class PipelineService {
               content,
               branch: repo.default_branch
             },
-            {
-              headers: { Authorization: `Bearer ${accessToken}` }
-            }
+            { headers: { Authorization: `Bearer ${accessToken}` } }
           );
         } else {
           throw error;
@@ -210,7 +254,6 @@ export class PipelineService {
       );
 
       const scans = scansResult.rows;
-
       const totalVulnerabilities = scans.reduce((sum, scan) => sum + scan.vulnerabilities_count, 0);
 
       const riskLevels = scans.map(s => s.risk_level);
