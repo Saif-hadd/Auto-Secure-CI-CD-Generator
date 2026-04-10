@@ -1,5 +1,9 @@
 export class YAMLGenerator {
   static generate(stack, pipelineType = 'secure') {
+    if (!stack || stack.type === 'unknown') {
+      console.warn(`[YAMLGenerator] Stack type is unknown - generated YAML will contain placeholder commands. Stack: ${JSON.stringify(stack)}`);
+    }
+
     const templates = {
       basic: this.generateBasic(stack),
       advanced: this.generateAdvanced(stack),

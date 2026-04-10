@@ -61,9 +61,10 @@ export class AnalyzerService {
     const stepNames = allSteps.map(s => s.name?.toLowerCase() || '');
     const stepUses = allSteps.map(s => s.uses?.toLowerCase() || '');
 
-    // ✅ Détection élargie — inclut les vraies actions ET les echo fake
+    // ✅ Détection élargie — noms de steps ET uses: ET with:
     const hasSAST = stepNames.some(n =>
-      n.includes('sast') || n.includes('static analysis') || n.includes('sonar') || n.includes('semgrep') || n.includes('codeql')
+      n.includes('sast') || n.includes('static analysis') || n.includes('sonar') ||
+      n.includes('semgrep') || n.includes('codeql')
     ) || stepUses.some(u =>
       u.includes('semgrep') || u.includes('codeql') || u.includes('sonarcloud')
     );
@@ -72,13 +73,13 @@ export class AnalyzerService {
       n.includes('secret') || n.includes('gitleaks') || n.includes('trufflehog')
     ) || stepUses.some(u =>
       u.includes('trivy') || u.includes('gitleaks') || u.includes('trufflehog')
-    ) || allSteps.some(s => {
-      const withObj = s.with || {};
-      return JSON.stringify(withObj).toLowerCase().includes('secret');
-    });
+    ) || allSteps.some(s =>
+      JSON.stringify(s.with || {}).toLowerCase().includes('secret')
+    );
 
     const hasDependency = stepNames.some(n =>
-      n.includes('dependency') || n.includes('vulnerabilit') || n.includes('audit') || n.includes('snyk')
+      n.includes('dependency') || n.includes('vulnerabilit') ||
+      n.includes('audit') || n.includes('snyk')
     ) || stepUses.some(u =>
       u.includes('trivy') || u.includes('snyk') || u.includes('dependency-check')
     );
@@ -142,28 +143,22 @@ export class AnalyzerService {
 
   static getAllSteps(parsedYAML) {
     const steps = [];
-
     if (parsedYAML.jobs) {
       Object.values(parsedYAML.jobs).forEach(job => {
-        if (job.steps) {
-          steps.push(...job.steps);
-        }
+        if (job.steps) steps.push(...job.steps);
       });
     }
-
     return steps;
   }
 
   static optimizeYAML(parsedYAML, issues, warnings) {
     try {
       const criticalIssues = issues.filter(i => i.severity === 'critical');
-      if (criticalIssues.length > 0) {
-        return null;
-      }
+      if (criticalIssues.length > 0) return null;
 
       const optimized = JSON.parse(JSON.stringify(parsedYAML));
 
-      // ✅ Ajouter permissions globales si manquantes
+      // ✅ Permissions globales
       if (!optimized.permissions) {
         optimized.permissions = {
           contents: 'read',
@@ -174,10 +169,7 @@ export class AnalyzerService {
       if (optimized.jobs) {
         Object.keys(optimized.jobs).forEach(jobKey => {
           const job = optimized.jobs[jobKey];
-
-          if (!job.steps) {
-            job.steps = [];
-          }
+          if (!job.steps) job.steps = [];
 
           const stepNames = job.steps.map(s => s.name?.toLowerCase() || '');
           const stepUses = job.steps.map(s => s.uses?.toLowerCase() || '');
@@ -194,14 +186,12 @@ export class AnalyzerService {
             n.includes('dependency') || n.includes('audit') || n.includes('vulnerabilit')
           ) || stepUses.some(u => u.includes('trivy') || u.includes('snyk'));
 
-          // ✅ SAST — vraie action Semgrep
+          // ✅ SAST — vraie action Semgrep (pas un echo)
           if (!hasSAST) {
             job.steps.push({
               name: 'SAST - Semgrep',
               uses: 'semgrep/semgrep-action@v1',
-              with: {
-                config: 'auto'
-              },
+              with: { config: 'auto' },
               'continue-on-error': true
             });
           }
@@ -224,9 +214,7 @@ export class AnalyzerService {
               name: 'Upload secrets scan results',
               uses: 'github/codeql-action/upload-sarif@v3',
               if: 'always()',
-              with: {
-                sarif_file: 'trivy-secrets.sarif'
-              },
+              with: { sarif_file: 'trivy-secrets.sarif' },
               'continue-on-error': true
             });
           }
@@ -250,15 +238,15 @@ export class AnalyzerService {
               name: 'Upload vulnerability scan results',
               uses: 'github/codeql-action/upload-sarif@v3',
               if: 'always()',
-              with: {
-                sarif_file: 'trivy-vuln.sarif'
-              },
+              with: { sarif_file: 'trivy-vuln.sarif' },
               'continue-on-error': true
             });
           }
 
-          // ✅ Npm audit si npm install détecté et pas d'audit existant
-          const hasNpmInstall = job.steps.some(s => s.run?.includes('npm install') || s.run?.includes('npm ci'));
+          // ✅ npm audit si npm détecté
+          const hasNpmInstall = job.steps.some(s =>
+            s.run?.includes('npm install') || s.run?.includes('npm ci')
+          );
           const hasAudit = stepNames.some(n => n.includes('audit'));
           if (hasNpmInstall && !hasAudit) {
             job.steps.push({
@@ -268,14 +256,12 @@ export class AnalyzerService {
             });
           }
 
-          // ✅ Pinning des versions — remplacer @v3 par @v4 pour checkout
+          // ✅ Upgrade checkout@v3 → v4
           job.steps = job.steps.map(step => {
-            if (step.uses?.includes('actions/checkout@v3')) {
+            if (step.uses?.includes('actions/checkout@v3'))
               return { ...step, uses: 'actions/checkout@v4' };
-            }
-            if (step.uses?.includes('actions/setup-node@v3')) {
+            if (step.uses?.includes('actions/setup-node@v3'))
               return { ...step, uses: 'actions/setup-node@v4' };
-            }
             return step;
           });
         });

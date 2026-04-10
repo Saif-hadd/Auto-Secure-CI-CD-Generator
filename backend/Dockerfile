@@ -13,6 +13,7 @@ FROM node:20-alpine
 
 RUN apk update && \
     apk upgrade && \
+    apk add --no-cache git && \
     rm -rf /var/cache/apk/*
 
 RUN addgroup -S appgroup && \
