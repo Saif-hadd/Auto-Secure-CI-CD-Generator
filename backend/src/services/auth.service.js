@@ -7,7 +7,7 @@ export class AuthService {
       const tokenResponse = await axios.post(
         'https://github.com/login/oauth/access_token',
         {
-          client_id: process.env.GITHUB_CLIENT_ID,
+          client_id:     process.env.GITHUB_CLIENT_ID,
           client_secret: process.env.GITHUB_CLIENT_SECRET,
           code
         },
@@ -16,15 +16,34 @@ export class AuthService {
         }
       );
 
+      // ✅ Log pour voir ce que GitHub retourne réellement
+      console.log('GitHub token response:', tokenResponse.data);
+
+      // ✅ Vérifier les erreurs GitHub explicites
+      if (tokenResponse.data.error) {
+        throw new Error(`GitHub OAuth error: ${tokenResponse.data.error_description || tokenResponse.data.error}`);
+      }
+
       const accessToken = tokenResponse.data.access_token;
 
       if (!accessToken) {
-        throw new Error('Failed to obtain access token');
+        throw new Error('Failed to obtain access token from GitHub');
       }
 
+      // ✅ Vérifier que le token fonctionne + récupérer les scopes
       const userResponse = await axios.get('https://api.github.com/user', {
-        headers: { Authorization: `Bearer ${accessToken}` }
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/vnd.github.v3+json'
+        }
       });
+
+      const scopes = userResponse.headers['x-oauth-scopes'] || '';
+      console.log('✅ Token scopes:', scopes);
+
+      if (!scopes.includes('repo')) {
+        console.warn('⚠️ Token missing repo scope — push to GitHub will fail');
+      }
 
       const githubUser = userResponse.data;
 
@@ -53,28 +72,32 @@ export class AuthService {
         user = insertResult.rows[0];
       }
 
+      console.log('✅ User saved, access_token in DB:', !!user.access_token);
+
       return {
         user: {
-          id: user.id,
-          username: user.username,
-          email: user.email,
+          id:         user.id,
+          username:   user.username,
+          email:      user.email,
           avatar_url: user.avatar_url,
-          github_id: user.github_id
+          github_id:  user.github_id
         },
         token: user.id
       };
+
     } catch (error) {
-      console.error('GitHub OAuth error:', error);
-      throw new Error('Authentication failed');
+      // ✅ Log le vrai message d'erreur
+      console.error('GitHub OAuth error:', error.message);
+      throw new Error(error.message || 'Authentication failed');
     }
   }
 
   static async getUserById(userId) {
     const result = await query(
-      'SELECT id, github_id, username, email, avatar_url, created_at FROM users WHERE id = $1',
+      // ✅ access_token inclus pour cohérence avec le middleware
+      'SELECT id, github_id, username, email, avatar_url, access_token, created_at FROM users WHERE id = $1',
       [userId]
     );
-
     return result.rows.length > 0 ? result.rows[0] : null;
   }
 }

@@ -59,9 +59,8 @@ export class AnalyzerService {
 
     const allSteps = this.getAllSteps(parsedYAML);
     const stepNames = allSteps.map(s => s.name?.toLowerCase() || '');
-    const stepUses = allSteps.map(s => s.uses?.toLowerCase() || '');
+    const stepUses  = allSteps.map(s => s.uses?.toLowerCase() || '');
 
-    // ✅ Détection élargie — noms de steps ET uses: ET with:
     const hasSAST = stepNames.some(n =>
       n.includes('sast') || n.includes('static analysis') || n.includes('sonar') ||
       n.includes('semgrep') || n.includes('codeql')
@@ -117,7 +116,7 @@ export class AnalyzerService {
 
     const hasTests = allSteps.some(s => {
       const name = s.name?.toLowerCase() || '';
-      const run = s.run?.toLowerCase() || '';
+      const run  = s.run?.toLowerCase()  || '';
       return name.includes('test') || run.includes('test');
     });
 
@@ -158,7 +157,6 @@ export class AnalyzerService {
 
       const optimized = JSON.parse(JSON.stringify(parsedYAML));
 
-      // ✅ Permissions globales
       if (!optimized.permissions) {
         optimized.permissions = {
           contents: 'read',
@@ -172,7 +170,7 @@ export class AnalyzerService {
           if (!job.steps) job.steps = [];
 
           const stepNames = job.steps.map(s => s.name?.toLowerCase() || '');
-          const stepUses = job.steps.map(s => s.uses?.toLowerCase() || '');
+          const stepUses  = job.steps.map(s => s.uses?.toLowerCase() || '');
 
           const hasSAST = stepNames.some(n =>
             n.includes('sast') || n.includes('semgrep') || n.includes('codeql')
@@ -186,9 +184,16 @@ export class AnalyzerService {
             n.includes('dependency') || n.includes('audit') || n.includes('vulnerabilit')
           ) || stepUses.some(u => u.includes('trivy') || u.includes('snyk'));
 
-          // ✅ SAST — vraie action Semgrep (pas un echo)
+          const hasNpmInstall = job.steps.some(s =>
+            s.run?.includes('npm install') || s.run?.includes('npm ci')
+          );
+          const hasAudit = stepNames.some(n => n.includes('audit'));
+
+          // ✅ Construire les steps de sécurité à injecter AVANT le build
+          const securitySteps = [];
+
           if (!hasSAST) {
-            job.steps.push({
+            securitySteps.push({
               name: 'SAST - Semgrep',
               uses: 'semgrep/semgrep-action@v1',
               with: { config: 'auto' },
@@ -196,9 +201,8 @@ export class AnalyzerService {
             });
           }
 
-          // ✅ Secrets scanning — vraie action Trivy
           if (!hasSecrets) {
-            job.steps.push({
+            securitySteps.push({
               name: 'Secrets scanning - Trivy',
               uses: 'aquasecurity/trivy-action@master',
               with: {
@@ -210,7 +214,7 @@ export class AnalyzerService {
               },
               'continue-on-error': true
             });
-            job.steps.push({
+            securitySteps.push({
               name: 'Upload secrets scan results',
               uses: 'github/codeql-action/upload-sarif@v3',
               if: 'always()',
@@ -219,9 +223,8 @@ export class AnalyzerService {
             });
           }
 
-          // ✅ Dependency scan — vraie action Trivy
           if (!hasDependency) {
-            job.steps.push({
+            securitySteps.push({
               name: 'Dependency vulnerability scan - Trivy',
               uses: 'aquasecurity/trivy-action@master',
               with: {
@@ -234,7 +237,7 @@ export class AnalyzerService {
               },
               'continue-on-error': true
             });
-            job.steps.push({
+            securitySteps.push({
               name: 'Upload vulnerability scan results',
               uses: 'github/codeql-action/upload-sarif@v3',
               if: 'always()',
@@ -243,17 +246,31 @@ export class AnalyzerService {
             });
           }
 
-          // ✅ npm audit si npm détecté
-          const hasNpmInstall = job.steps.some(s =>
-            s.run?.includes('npm install') || s.run?.includes('npm ci')
-          );
-          const hasAudit = stepNames.some(n => n.includes('audit'));
           if (hasNpmInstall && !hasAudit) {
-            job.steps.push({
+            securitySteps.push({
               name: 'npm audit',
               run: 'npm audit --audit-level=moderate --production || true',
               'continue-on-error': true
             });
+          }
+
+          // ✅ Injecter AVANT le step build
+          if (securitySteps.length > 0) {
+            const buildIndex = job.steps.findIndex(s => {
+              const name = s.name?.toLowerCase() || '';
+              const run  = s.run?.toLowerCase()  || '';
+              return name.includes('build') || run.includes('build');
+            });
+
+            if (buildIndex !== -1) {
+              job.steps.splice(buildIndex, 0, ...securitySteps);
+            } else {
+              const checkoutIndex = job.steps.findIndex(s =>
+                s.uses?.includes('actions/checkout')
+              );
+              const insertAt = checkoutIndex !== -1 ? checkoutIndex + 1 : 0;
+              job.steps.splice(insertAt, 0, ...securitySteps);
+            }
           }
 
           // ✅ Upgrade checkout@v3 → v4

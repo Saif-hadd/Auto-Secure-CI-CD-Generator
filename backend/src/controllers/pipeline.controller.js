@@ -36,10 +36,10 @@ export const pushPipelineToGitHub = async (req, res) => {
   try {
     const { pipelineId } = req.params;
 
+    // ✅ accessToken supprimé — le service le prend depuis la DB
     const result = await PipelineService.pushToGitHub(
       pipelineId,
-      req.user.id,
-      req.user.access_token
+      req.user.id
     );
 
     res.json(result);
