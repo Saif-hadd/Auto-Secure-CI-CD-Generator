@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Loader2, Shield, AlertTriangle, CheckCircle, ExternalLink, Download, Wrench, GitPullRequest } from 'lucide-react';
+import { ArrowLeft, Loader2, Shield, AlertTriangle, CheckCircle, ExternalLink, Download, Wrench, GitPullRequest, Zap, Code, Rocket } from 'lucide-react';
 import { ApiClient } from '../lib/api';
 
 interface PipelineGeneratorProps {
@@ -50,7 +50,6 @@ export function PipelineGenerator({ repository, onBack }: PipelineGeneratorProps
       if (!repository.stack_detected) {
         await ApiClient.detectStack(repository.id);
       }
-
       const { pipeline: newPipeline } = await ApiClient.generatePipeline(repository.id, pipelineType);
       setPipeline(newPipeline);
       await loadSecurityDashboard(newPipeline.id);
@@ -63,14 +62,12 @@ export function PipelineGenerator({ repository, onBack }: PipelineGeneratorProps
 
   const handlePush = async () => {
     if (!pipeline) return;
-
     setPushing(true);
     try {
       await ApiClient.pushPipelineToGitHub(pipeline.id);
       setPushSuccess(true);
     } catch (error) {
       console.error('Failed to push pipeline:', error);
-      alert('Failed to push pipeline to GitHub. Please check your permissions.');
     } finally {
       setPushing(false);
     }
@@ -78,7 +75,6 @@ export function PipelineGenerator({ repository, onBack }: PipelineGeneratorProps
 
   const handleDownload = () => {
     if (!pipeline) return;
-
     const blob = new Blob([pipeline.generated_yaml], { type: 'text/yaml' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -92,13 +88,11 @@ export function PipelineGenerator({ repository, onBack }: PipelineGeneratorProps
 
   const handleAutoRemediate = async () => {
     if (!pipeline) return;
-
     setRemediating(true);
     setRemediationResult(null);
     try {
       const result = await ApiClient.runAutoRemediation(pipeline.id);
       setRemediationResult(result);
-
       if (result.success) {
         await loadSecurityDashboard(pipeline.id);
       }
@@ -115,85 +109,89 @@ export function PipelineGenerator({ repository, onBack }: PipelineGeneratorProps
 
   const getRiskColor = (level: string) => {
     switch (level) {
-      case 'critical': return 'text-red-600 bg-red-50';
-      case 'high': return 'text-orange-600 bg-orange-50';
-      case 'medium': return 'text-yellow-600 bg-yellow-50';
-      default: return 'text-green-600 bg-green-50';
+      case 'critical': return 'text-red-400 bg-red-500/10 border-red-500/20';
+      case 'high': return 'text-orange-400 bg-orange-500/10 border-orange-500/20';
+      case 'medium': return 'text-yellow-400 bg-yellow-500/10 border-yellow-500/20';
+      default: return 'text-green-400 bg-green-500/10 border-green-500/20';
     }
   };
+
+  const getRiskDot = (level: string) => {
+    switch (level) {
+      case 'critical': return 'bg-red-500';
+      case 'high': return 'bg-orange-500';
+      case 'medium': return 'bg-yellow-500';
+      default: return 'bg-green-500';
+    }
+  };
+
+  const pipelineTypes = [
+    { id: 'basic' as const, title: 'Basic', desc: 'Simple CI with build and test', icon: Code, color: 'from-slate-500 to-slate-600' },
+    { id: 'advanced' as const, title: 'Advanced', desc: 'Lint, test, and Docker build', icon: Zap, color: 'from-cyan-500 to-blue-500' },
+    { id: 'secure' as const, title: 'Secure', desc: 'Full DevSecOps with security scanning', icon: Shield, color: 'from-cyber-500 to-cyan-500' },
+  ];
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <button
         onClick={onBack}
-        className="flex items-center space-x-2 text-gray-600 hover:text-gray-900 mb-6"
+        className="flex items-center space-x-2 text-slate-400 hover:text-white mb-6 transition-colors duration-200 group"
       >
-        <ArrowLeft className="w-5 h-5" />
-        <span>Back to repositories</span>
+        <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform duration-200" />
+        <span className="text-sm">Back to repositories</span>
       </button>
 
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">{repository.repo_name}</h2>
-        <a
-          href={repository.repo_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center space-x-1 text-blue-600 hover:text-blue-700"
-        >
-          <span className="text-sm">{repository.repo_full_name}</span>
-          <ExternalLink className="w-4 h-4" />
-        </a>
+      <div className="glass-card rounded-xl p-6 mb-6 animate-slide-up">
+        <div className="flex items-center space-x-4">
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-cyber-500 to-cyan-500 flex items-center justify-center flex-shrink-0">
+            <Shield className="w-6 h-6 text-white" />
+          </div>
+          <div>
+            <h2 className="text-2xl font-bold text-white">{repository.repo_name}</h2>
+            <a
+              href={repository.repo_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center space-x-1 text-cyber-400 hover:text-cyber-300 transition-colors text-sm"
+            >
+              <span>{repository.repo_full_name}</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          </div>
+        </div>
       </div>
 
       {!pipeline && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
-          <h3 className="text-xl font-bold text-gray-900 mb-4">Select Pipeline Type</h3>
+        <div className="glass-card rounded-xl p-8 animate-slide-up-delayed">
+          <h3 className="text-xl font-bold text-white mb-6">Select Pipeline Type</h3>
 
           <div className="grid md:grid-cols-3 gap-4 mb-8">
-            <button
-              onClick={() => setPipelineType('basic')}
-              className={`p-6 rounded-xl border-2 transition-all text-left ${
-                pipelineType === 'basic'
-                  ? 'border-blue-600 bg-blue-50'
-                  : 'border-gray-200 hover:border-gray-300'
-              }`}
-            >
-              <h4 className="font-semibold text-gray-900 mb-2">Basic</h4>
-              <p className="text-sm text-gray-600">Simple CI pipeline with build and test steps</p>
-            </button>
-
-            <button
-              onClick={() => setPipelineType('advanced')}
-              className={`p-6 rounded-xl border-2 transition-all text-left ${
-                pipelineType === 'advanced'
-                  ? 'border-blue-600 bg-blue-50'
-                  : 'border-gray-200 hover:border-gray-300'
-              }`}
-            >
-              <h4 className="font-semibold text-gray-900 mb-2">Advanced</h4>
-              <p className="text-sm text-gray-600">Includes linting, testing, and Docker build</p>
-            </button>
-
-            <button
-              onClick={() => setPipelineType('secure')}
-              className={`p-6 rounded-xl border-2 transition-all text-left ${
-                pipelineType === 'secure'
-                  ? 'border-blue-600 bg-blue-50'
-                  : 'border-gray-200 hover:border-gray-300'
-              }`}
-            >
-              <div className="flex items-center space-x-2 mb-2">
-                <h4 className="font-semibold text-gray-900">Secure</h4>
-                <Shield className="w-5 h-5 text-blue-600" />
-              </div>
-              <p className="text-sm text-gray-600">Full DevSecOps with security scanning</p>
-            </button>
+            {pipelineTypes.map((pt) => (
+              <button
+                key={pt.id}
+                onClick={() => setPipelineType(pt.id)}
+                className={`relative p-6 rounded-xl border transition-all duration-300 text-left group ${
+                  pipelineType === pt.id
+                    ? 'bg-cyber-500/10 border-cyber-500/40 shadow-[0_0_20px_rgba(13,110,253,0.1)]'
+                    : 'bg-white/[0.02] border-white/[0.06] hover:border-white/[0.12] hover:bg-white/[0.04]'
+                }`}
+              >
+                {pipelineType === pt.id && (
+                  <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-cyber-500 to-cyan-500 rounded-t-xl" />
+                )}
+                <div className={`w-10 h-10 rounded-lg bg-gradient-to-br ${pt.color} flex items-center justify-center mb-4`}>
+                  <pt.icon className="w-5 h-5 text-white" />
+                </div>
+                <h4 className="font-semibold text-white mb-1">{pt.title}</h4>
+                <p className="text-sm text-slate-400">{pt.desc}</p>
+              </button>
+            ))}
           </div>
 
           <button
             onClick={handleGenerate}
             disabled={loading}
-            className="w-full py-4 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+            className="w-full btn-cyber py-4 text-base flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? (
               <>
@@ -201,7 +199,10 @@ export function PipelineGenerator({ repository, onBack }: PipelineGeneratorProps
                 <span>Generating Pipeline...</span>
               </>
             ) : (
-              <span>Generate Secure CI/CD Pipeline</span>
+              <>
+                <Rocket className="w-5 h-5" />
+                <span>Generate Secure CI/CD Pipeline</span>
+              </>
             )}
           </button>
         </div>
@@ -210,30 +211,32 @@ export function PipelineGenerator({ repository, onBack }: PipelineGeneratorProps
       {pipeline && (
         <div className="space-y-6">
           {pushSuccess && (
-            <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-center space-x-3">
-              <CheckCircle className="w-6 h-6 text-green-600 flex-shrink-0" />
+            <div className="glass rounded-xl p-4 flex items-center space-x-3 border border-green-500/20 animate-scale-in">
+              <div className="w-10 h-10 rounded-lg bg-green-500/10 flex items-center justify-center flex-shrink-0">
+                <CheckCircle className="w-5 h-5 text-green-400" />
+              </div>
               <div>
-                <p className="font-medium text-green-900">Pipeline pushed successfully!</p>
-                <p className="text-sm text-green-700">Your secure CI/CD pipeline is now active on GitHub.</p>
+                <p className="font-medium text-green-300">Pipeline pushed successfully!</p>
+                <p className="text-sm text-green-400/70">Your secure CI/CD pipeline is now active on GitHub.</p>
               </div>
             </div>
           )}
 
           {remediationResult && (
-            <div className={`border rounded-xl p-4 flex items-start space-x-3 ${
-              remediationResult.success
-                ? 'bg-green-50 border-green-200'
-                : 'bg-yellow-50 border-yellow-200'
+            <div className={`glass rounded-xl p-4 flex items-start space-x-3 border animate-scale-in ${
+              remediationResult.success ? 'border-green-500/20' : 'border-yellow-500/20'
             }`}>
-              {remediationResult.success ? (
-                <GitPullRequest className="w-6 h-6 text-green-600 flex-shrink-0 mt-1" />
-              ) : (
-                <AlertTriangle className="w-6 h-6 text-yellow-600 flex-shrink-0 mt-1" />
-              )}
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                remediationResult.success ? 'bg-green-500/10' : 'bg-yellow-500/10'
+              }`}>
+                {remediationResult.success ? (
+                  <GitPullRequest className="w-5 h-5 text-green-400" />
+                ) : (
+                  <AlertTriangle className="w-5 h-5 text-yellow-400" />
+                )}
+              </div>
               <div className="flex-1">
-                <p className={`font-medium ${
-                  remediationResult.success ? 'text-green-900' : 'text-yellow-900'
-                }`}>
+                <p className={`font-medium ${remediationResult.success ? 'text-green-300' : 'text-yellow-300'}`}>
                   {remediationResult.message || 'Auto-remediation completed'}
                 </p>
                 {remediationResult.success && remediationResult.pr_url && (
@@ -241,18 +244,18 @@ export function PipelineGenerator({ repository, onBack }: PipelineGeneratorProps
                     href={remediationResult.pr_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center space-x-1 text-sm text-green-700 hover:text-green-800 mt-2"
+                    className="inline-flex items-center space-x-1 text-sm text-cyber-400 hover:text-cyber-300 mt-2 transition-colors"
                   >
-                    <span>View Pull Request #{remediationResult.pr_number}</span>
+                    <span>View PR #{remediationResult.pr_number}</span>
                     <ExternalLink className="w-3 h-3" />
                   </a>
                 )}
                 {remediationResult.files_updated && remediationResult.files_updated.length > 0 && (
                   <div className="mt-2">
-                    <p className="text-sm text-green-700">
+                    <p className="text-sm text-slate-400">
                       Updated {remediationResult.files_updated.length} file(s):
                     </p>
-                    <ul className="text-sm text-green-700 list-disc list-inside mt-1">
+                    <ul className="text-sm text-slate-500 list-disc list-inside mt-1">
                       {remediationResult.files_updated.map((file: string, i: number) => (
                         <li key={i}>{file}</li>
                       ))}
@@ -264,68 +267,83 @@ export function PipelineGenerator({ repository, onBack }: PipelineGeneratorProps
           )}
 
           {securityDashboard && (
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-              <h3 className="text-xl font-bold text-gray-900 mb-6">Security Dashboard</h3>
+            <div className="glass-card rounded-xl p-6 animate-slide-up">
+              <div className="flex items-center space-x-3 mb-6">
+                <div className="w-8 h-8 rounded-lg bg-cyber-500/10 border border-cyber-500/20 flex items-center justify-center">
+                  <Shield className="w-4 h-4 text-cyber-400" />
+                </div>
+                <h3 className="text-xl font-bold text-white">Security Dashboard</h3>
+              </div>
 
-              <div className="grid md:grid-cols-3 gap-6 mb-6">
-                <div className="p-4 bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl">
-                  <p className="text-sm text-gray-600 mb-1">Security Score</p>
-                  <p className="text-3xl font-bold text-blue-600">
-                    {securityDashboard.summary.securityScore}/100
+              <div className="grid md:grid-cols-3 gap-4 mb-6">
+                <div className="metric-card score glass rounded-xl p-5 relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-20 h-20 bg-cyber-500/5 rounded-full -translate-y-1/2 translate-x-1/2" />
+                  <p className="text-xs font-medium text-slate-400 uppercase tracking-wider mb-2">Security Score</p>
+                  <p className="text-4xl font-bold text-gradient">
+                    {securityDashboard.summary.securityScore}
                   </p>
+                  <p className="text-xs text-slate-500 mt-1">out of 100</p>
                 </div>
 
-                <div className="p-4 bg-gradient-to-br from-orange-50 to-red-50 rounded-xl">
-                  <p className="text-sm text-gray-600 mb-1">Vulnerabilities</p>
-                  <p className="text-3xl font-bold text-orange-600">
+                <div className="metric-card vulns glass rounded-xl p-5 relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-20 h-20 bg-orange-500/5 rounded-full -translate-y-1/2 translate-x-1/2" />
+                  <p className="text-xs font-medium text-slate-400 uppercase tracking-wider mb-2">Vulnerabilities</p>
+                  <p className={`text-4xl font-bold ${
+                    securityDashboard.summary.totalVulnerabilities > 0 ? 'text-orange-400' : 'text-green-400'
+                  }`}>
                     {securityDashboard.summary.totalVulnerabilities}
                   </p>
+                  <p className="text-xs text-slate-500 mt-1">total findings</p>
                 </div>
 
-                <div className="p-4 bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl">
-                  <p className="text-sm text-gray-600 mb-1">Risk Level</p>
-                  <p className={`text-3xl font-bold capitalize ${
-                    securityDashboard.summary.overallRisk === 'low' ? 'text-green-600' :
-                    securityDashboard.summary.overallRisk === 'medium' ? 'text-yellow-600' :
-                    'text-red-600'
-                  }`}>
-                    {securityDashboard.summary.overallRisk}
-                  </p>
+                <div className="metric-card risk glass rounded-xl p-5 relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-20 h-20 bg-teal-500/5 rounded-full -translate-y-1/2 translate-x-1/2" />
+                  <p className="text-xs font-medium text-slate-400 uppercase tracking-wider mb-2">Risk Level</p>
+                  <div className="flex items-center space-x-2">
+                    <div className={`w-2.5 h-2.5 rounded-full ${getRiskDot(securityDashboard.summary.overallRisk)} animate-pulse`} />
+                    <p className={`text-2xl font-bold capitalize ${
+                      securityDashboard.summary.overallRisk === 'low' ? 'text-green-400' :
+                      securityDashboard.summary.overallRisk === 'medium' ? 'text-yellow-400' :
+                      'text-red-400'
+                    }`}>
+                      {securityDashboard.summary.overallRisk}
+                    </p>
+                  </div>
                 </div>
               </div>
 
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <h4 className="font-semibold text-gray-900">Security Scans</h4>
+                  <h4 className="font-semibold text-white text-sm">Security Scans</h4>
                   {securityDashboard.summary.totalVulnerabilities > 0 && (
                     <button
                       onClick={handleAutoRemediate}
                       disabled={remediating}
-                      className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                      className="flex items-center space-x-2 px-4 py-2 bg-green-500/10 border border-green-500/20 text-green-400 rounded-lg hover:bg-green-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                     >
                       {remediating ? (
                         <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
                           <span>Fixing...</span>
                         </>
                       ) : (
                         <>
-                          <Wrench className="w-4 h-4" />
-                          <span>Auto-Fix Vulnerabilities</span>
+                          <Wrench className="w-3.5 h-3.5" />
+                          <span>Auto-Fix</span>
                         </>
                       )}
                     </button>
                   )}
                 </div>
                 {securityDashboard.scans.map((scan: any, index: number) => (
-                  <div key={index} className="p-4 border border-gray-200 rounded-lg">
+                  <div key={index} className="glass-light rounded-lg p-4 border border-white/5 hover:border-white/10 transition-all duration-200">
                     <div className="flex items-center justify-between mb-2">
-                      <span className="font-medium text-gray-900 uppercase">{scan.scan_type}</span>
-                      <span className={`px-3 py-1 rounded-full text-sm font-medium ${getRiskColor(scan.risk_level)}`}>
+                      <span className="font-medium text-white text-sm uppercase tracking-wider">{scan.scan_type}</span>
+                      <span className={`px-2.5 py-1 rounded-md text-xs font-medium border ${getRiskColor(scan.risk_level)}`}>
                         {scan.risk_level}
                       </span>
                     </div>
-                    <p className="text-sm text-gray-600">
+                    <p className="text-sm text-slate-400">
                       {scan.vulnerabilities_count} {scan.vulnerabilities_count === 1 ? 'issue' : 'issues'} found
                     </p>
                   </div>
@@ -334,43 +352,61 @@ export function PipelineGenerator({ repository, onBack }: PipelineGeneratorProps
             </div>
           )}
 
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <div className="glass-card rounded-xl p-6 animate-slide-up-delayed">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-bold text-gray-900">Generated Pipeline</h3>
-              <div className="flex space-x-3">
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center">
+                  <Code className="w-4 h-4 text-cyan-400" />
+                </div>
+                <h3 className="text-xl font-bold text-white">Generated Pipeline</h3>
+              </div>
+              <div className="flex space-x-2">
                 <button
                   onClick={handleDownload}
-                  className="flex items-center space-x-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+                  className="btn-outline-cyber flex items-center space-x-2 px-4 py-2 text-sm rounded-lg"
                 >
-                  <Download className="w-4 h-4" />
+                  <Download className="w-3.5 h-3.5" />
                   <span>Download</span>
                 </button>
                 <button
                   onClick={handlePush}
                   disabled={pushing}
-                  className="flex items-center space-x-2 px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="btn-cyber flex items-center space-x-2 px-5 py-2 text-sm rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {pushing ? (
                     <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
                       <span>Pushing...</span>
                     </>
                   ) : (
-                    <span>Push to GitHub</span>
+                    <>
+                      <Rocket className="w-3.5 h-3.5" />
+                      <span>Push to GitHub</span>
+                    </>
                   )}
                 </button>
               </div>
             </div>
 
-            <pre className="bg-gray-900 text-gray-100 p-6 rounded-lg overflow-x-auto text-sm">
-              <code>{pipeline.generated_yaml}</code>
-            </pre>
+            <div className="code-block p-4 pt-12 relative overflow-hidden">
+              <div className="absolute top-2.5 left-4 flex space-x-1.5 z-10">
+                <div className="w-2.5 h-2.5 rounded-full bg-red-500/60" />
+                <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/60" />
+                <div className="w-2.5 h-2.5 rounded-full bg-green-500/60" />
+              </div>
+              <div className="absolute top-2.5 right-4 text-[10px] text-slate-500 font-mono z-10">
+                secure-pipeline.yml
+              </div>
+              <pre className="text-xs text-slate-300 font-mono leading-relaxed overflow-x-auto max-h-[500px] overflow-y-auto">
+                <code>{pipeline.generated_yaml}</code>
+              </pre>
+            </div>
           </div>
 
           <button
             onClick={handleGenerate}
             disabled={loading}
-            className="w-full py-3 border-2 border-blue-600 text-blue-600 rounded-xl hover:bg-blue-50 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full py-3 btn-outline-cyber text-sm rounded-xl disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? 'Regenerating...' : 'Regenerate Pipeline'}
           </button>
