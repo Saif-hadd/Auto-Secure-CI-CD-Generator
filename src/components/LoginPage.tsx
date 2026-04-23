@@ -179,8 +179,8 @@ export function LoginPage() {
                 </div>
 
                 <div className="space-y-5">
-                  {steps.map((step, i) => (
-                    <div key={step.num} className="flex items-start space-x-4 group">
+                  {steps.map((step) => (
+  <div key={step.num} className="flex items-start space-x-4 group">
                       <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-cyber-600/20 border border-cyber-500/30 flex items-center justify-center font-mono text-sm font-bold text-cyber-400 group-hover:bg-cyber-600/30 group-hover:border-cyber-500/50 transition-all duration-300">
                         {step.num}
                       </div>
