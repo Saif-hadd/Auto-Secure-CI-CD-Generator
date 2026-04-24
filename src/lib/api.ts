@@ -1,12 +1,6 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+import type { User } from '../types/user';
 
-interface User {
-  id: string;
-  github_id: string;
-  username: string;
-  email: string;
-  avatar_url: string;
-}
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 interface Repository {
   id: string;
@@ -20,6 +14,79 @@ interface Pipeline {
   generated_yaml: string;
   status: string;
   security_features: string[];
+}
+
+type JsonObject = Record<string, unknown>;
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === 'object' && value !== null;
+}
+
+function parseString(value: unknown, fieldName: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`Invalid API response: ${fieldName} must be a string`);
+  }
+
+  return value;
+}
+
+function parseNullableString(value: unknown, fieldName: string): string | null {
+  if (value === null) {
+    return null;
+  }
+
+  return parseString(value, fieldName);
+}
+
+function parseGithubId(value: unknown): number {
+  if (typeof value === 'number' && Number.isSafeInteger(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsedValue = Number(value);
+
+    if (Number.isSafeInteger(parsedValue)) {
+      return parsedValue;
+    }
+  }
+
+  throw new Error('Invalid API response: github_id must be a safe integer');
+}
+
+function normalizeUser(value: unknown): User {
+  if (!isJsonObject(value)) {
+    throw new Error('Invalid API response: user payload must be an object');
+  }
+
+  return {
+    id: parseString(value.id, 'user.id'),
+    github_id: parseGithubId(value.github_id),
+    username: parseString(value.username, 'user.username'),
+    email: parseNullableString(value.email, 'user.email'),
+    avatar_url: parseString(value.avatar_url, 'user.avatar_url'),
+  };
+}
+
+function normalizeAuthResponse(value: unknown): { user: User; token: string } {
+  if (!isJsonObject(value)) {
+    throw new Error('Invalid API response: auth payload must be an object');
+  }
+
+  return {
+    user: normalizeUser(value.user),
+    token: parseString(value.token, 'token'),
+  };
+}
+
+function normalizeCurrentUserResponse(value: unknown): { user: User } {
+  if (!isJsonObject(value)) {
+    throw new Error('Invalid API response: current user payload must be an object');
+  }
+
+  return {
+    user: normalizeUser(value.user),
+  };
 }
 
 export class ApiClient {
@@ -55,14 +122,18 @@ export class ApiClient {
   }
 
   static async githubCallback(code: string) {
-    return this.request<{ user: User; token: string }>('/api/auth/github/callback', {
+    const response = await this.request<unknown>('/api/auth/github/callback', {
       method: 'POST',
       body: JSON.stringify({ code }),
     });
+
+    return normalizeAuthResponse(response);
   }
 
   static async getCurrentUser() {
-    return this.request<{ user: User }>('/api/auth/me');
+    const response = await this.request<unknown>('/api/auth/me');
+
+    return normalizeCurrentUserResponse(response);
   }
 
   static async syncRepositories() {

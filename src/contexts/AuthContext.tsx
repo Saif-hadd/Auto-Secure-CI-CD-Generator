@@ -1,13 +1,6 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import { ApiClient } from '../lib/api';
-
-interface User {
-  id: string;
-  username: string;
-  email: string;
-  avatar_url: string;
-  github_id: number;
-}
+import type { User } from '../types/user';
 
 interface AuthContextType {
   user: User | null;
@@ -23,10 +16,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    checkAuth();
+    void checkAuth();
   }, []);
 
-  const checkAuth = async () => {
+  const checkAuth = async (): Promise<void> => {
     const token = localStorage.getItem('auth_token');
     if (!token) {
       setLoading(false);
@@ -44,7 +37,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const login = async (code: string) => {
+  const login = async (code: string): Promise<void> => {
     try {
       const { user, token } = await ApiClient.githubCallback(code);
       localStorage.setItem('auth_token', token);
