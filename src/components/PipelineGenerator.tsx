@@ -2,6 +2,13 @@ import { useState, useEffect } from 'react';
 import { ArrowLeft, Loader2, Shield, AlertTriangle, CheckCircle, ExternalLink, Download, Wrench, GitPullRequest, Zap, Code, Rocket } from 'lucide-react';
 import { ApiClient } from '../lib/api';
 
+interface RemediationResult {
+  success: boolean;
+  message?: string;
+  pr_url?: string;
+  pr_number?: number;
+  files_updated?: string[];
+}
 interface PipelineGeneratorProps {
   repository: any;
   onBack: () => void;
@@ -15,7 +22,7 @@ export function PipelineGenerator({ repository, onBack }: PipelineGeneratorProps
   const [pushing, setPushing] = useState(false);
   const [pushSuccess, setPushSuccess] = useState(false);
   const [remediating, setRemediating] = useState(false);
-  const [remediationResult, setRemediationResult] = useState<any | null>(null);
+  const [remediationResult, setRemediationResult] = useState<RemediationResult | null>(null);
 
   useEffect(() => {
     loadExistingPipeline();
@@ -91,8 +98,8 @@ export function PipelineGenerator({ repository, onBack }: PipelineGeneratorProps
     setRemediating(true);
     setRemediationResult(null);
     try {
-      const result = await ApiClient.runAutoRemediation(pipeline.id);
-      setRemediationResult(result);
+  const result = await ApiClient.runAutoRemediation(pipeline.id) as RemediationResult;
+    setRemediationResult(result);
       if (result.success) {
         await loadSecurityDashboard(pipeline.id);
       }

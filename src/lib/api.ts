@@ -2,6 +2,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 interface User {
   id: string;
+  github_id: string;
   username: string;
   email: string;
   avatar_url: string;
