@@ -281,6 +281,12 @@ jobs:
       - name: Create SBOM workspace
         run: mkdir -p sbom
 
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@v0.2.3
+        with:
+          version: v0.69.3
+          cache: true
+
       - name: Generate repository SBOM
         uses: anchore/sbom-action@v0
         with:
@@ -291,21 +297,21 @@ jobs:
           dependency-snapshot: ${{ github.event_name == 'push' }}
 
       - name: Block on critical vulnerabilities in source SBOM
-        id: scan-source-sbom
-        uses: anchore/scan-action@v7
-        with:
-          sbom: sbom/repository.spdx.json
-          fail-build: true
-          severity-cutoff: critical
-          output-format: sarif
-          output-file: sbom/source-sbom-vulnerabilities.sarif
+        run: |
+          trivy sbom \
+            --scanners vuln \
+            --severity CRITICAL \
+            --format sarif \
+            --output sbom/source-sbom-vulnerabilities.sarif \
+            --exit-code 1 \
+            sbom/repository.spdx.json
 
       - name: Upload source SBOM vulnerability results
         uses: github/codeql-action/upload-sarif@v4
         if: always() && hashFiles('sbom/source-sbom-vulnerabilities.sarif') != ''
         with:
           sarif_file: sbom/source-sbom-vulnerabilities.sarif
-          category: 'grype-source-sbom'
+          category: 'trivy-source-sbom'
 
       - name: Upload source SBOM
         uses: actions/upload-artifact@v4
@@ -343,6 +349,12 @@ jobs:
       - name: Create SBOM workspace
         run: mkdir -p sbom
 
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@v0.2.3
+        with:
+          version: v0.69.3
+          cache: true
+
       - name: Generate frontend image SBOM
         uses: anchore/sbom-action@v0
         with:
@@ -352,21 +364,21 @@ jobs:
           upload-artifact: false
 
       - name: Block on critical vulnerabilities in frontend image SBOM
-        id: scan-frontend-image-sbom
-        uses: anchore/scan-action@v7
-        with:
-          sbom: sbom/frontend-image.spdx.json
-          fail-build: true
-          severity-cutoff: critical
-          output-format: sarif
-          output-file: sbom/frontend-image-sbom-vulnerabilities.sarif
+        run: |
+          trivy sbom \
+            --scanners vuln \
+            --severity CRITICAL \
+            --format sarif \
+            --output sbom/frontend-image-sbom-vulnerabilities.sarif \
+            --exit-code 1 \
+            sbom/frontend-image.spdx.json
 
       - name: Upload frontend image SBOM vulnerability results
         uses: github/codeql-action/upload-sarif@v4
         if: always() && hashFiles('sbom/frontend-image-sbom-vulnerabilities.sarif') != ''
         with:
           sarif_file: sbom/frontend-image-sbom-vulnerabilities.sarif
-          category: 'grype-frontend-image-sbom'
+          category: 'trivy-frontend-image-sbom'
 
       - name: Generate backend image SBOM
         uses: anchore/sbom-action@v0
@@ -377,21 +389,21 @@ jobs:
           upload-artifact: false
 
       - name: Block on critical vulnerabilities in backend image SBOM
-        id: scan-backend-image-sbom
-        uses: anchore/scan-action@v7
-        with:
-          sbom: sbom/backend-image.spdx.json
-          fail-build: true
-          severity-cutoff: critical
-          output-format: sarif
-          output-file: sbom/backend-image-sbom-vulnerabilities.sarif
+        run: |
+          trivy sbom \
+            --scanners vuln \
+            --severity CRITICAL \
+            --format sarif \
+            --output sbom/backend-image-sbom-vulnerabilities.sarif \
+            --exit-code 1 \
+            sbom/backend-image.spdx.json
 
       - name: Upload backend image SBOM vulnerability results
         uses: github/codeql-action/upload-sarif@v4
         if: always() && hashFiles('sbom/backend-image-sbom-vulnerabilities.sarif') != ''
         with:
           sarif_file: sbom/backend-image-sbom-vulnerabilities.sarif
-          category: 'grype-backend-image-sbom'
+          category: 'trivy-backend-image-sbom'
 
       - name: Attest frontend image SBOM
         uses: actions/attest@v4
