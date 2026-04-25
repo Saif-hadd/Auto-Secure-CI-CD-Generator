@@ -223,12 +223,14 @@ jobs:
         if: always() && hashFiles('trivy-frontend-image.sarif') != ''
         with:
           sarif_file: 'trivy-frontend-image.sarif'
+          category: 'trivy-frontend-image'
 
       - name: Upload backend container scan results
         uses: github/codeql-action/upload-sarif@v4
         if: always() && hashFiles('trivy-backend-image.sarif') != ''
         with:
           sarif_file: 'trivy-backend-image.sarif'
+          category: 'trivy-backend-image'
 
   security-summary:
     name: Security Summary
