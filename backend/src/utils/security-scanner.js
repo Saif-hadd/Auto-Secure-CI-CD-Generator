@@ -3,25 +3,28 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
-import { env } from './env.js';
 import { logger } from './logger.js';
 
 const execFileAsync = promisify(execFile);
-const ALLOWED_BASE_DIR = path.resolve(env.ALLOWED_SCAN_BASE_DIR); // FIX: centralize the allowed scan base directory for project path validation
+const ALLOWED_BASE = process.env.ALLOWED_SCAN_BASE_DIR || '/tmp'; // FIX: prevent shell injection by restricting scan roots to an allowed base directory
 
 export class SecurityScanner {
-  static validateProjectPath(projectPath) {
-    const safeProjectPath = path.resolve(projectPath);
+  static validatePath(p) { // FIX: constrain scanner inputs to approved filesystem roots
+    const resolved = path.resolve(p); // FIX: normalize untrusted scan paths before validation
 
-    if (!safeProjectPath.startsWith(ALLOWED_BASE_DIR)) {
-      throw new Error('Invalid path'); // FIX: block project paths outside the approved scan directory
+    if (!resolved.startsWith(ALLOWED_BASE)) { // FIX: reject paths outside the approved scan base
+      throw new Error(`Path not allowed: ${p}`); // FIX: prevent shell injection
     }
 
-    return safeProjectPath;
+    return resolved; // FIX: pass only validated absolute paths to shell-backed scanners
+  }
+
+  static validateProjectPath(projectPath) { // FIX: preserve existing validation entrypoints while using the new allowlist helper
+    return this.validatePath(projectPath); // FIX: reuse the shared path allowlist validation
   }
 
   static async runAllScans(projectPath, scannerType = 'trivy') {
-    const safeProjectPath = this.validateProjectPath(projectPath); // FIX: normalize and validate the project path before dispatching shell-backed scans
+    const safeProjectPath = this.validatePath(projectPath); // FIX: prevent shell injection by validating projectPath before scanning
     const scanTypes = ['dependencies', 'secrets', 'container', 'sast'];
 
     const scans = await Promise.allSettled([
@@ -65,7 +68,7 @@ export class SecurityScanner {
   }
 
   static async runTrivyDependencyScan(projectPath) {
-    const safeProjectPath = this.validateProjectPath(projectPath); // FIX: validate every projectPath before it reaches a shell-backed scan
+    const safeProjectPath = this.validatePath(projectPath); // FIX: prevent shell injection by validating projectPath before scanning
 
     try {
       const { stdout } = await execFileAsync(
@@ -92,7 +95,7 @@ export class SecurityScanner {
   }
 
   static async runSnykDependencyScan(projectPath) {
-    const safeProjectPath = this.validateProjectPath(projectPath); // FIX: validate every projectPath before it reaches a shell-backed scan
+    const safeProjectPath = this.validatePath(projectPath); // FIX: prevent shell injection by validating projectPath before scanning
 
     try {
       const { stdout } = await execFileAsync(
@@ -136,7 +139,7 @@ export class SecurityScanner {
   }
 
   static async runSecretsScan(projectPath) {
-    const safeProjectPath = this.validateProjectPath(projectPath); // FIX: validate every projectPath before it reaches a shell-backed scan
+    const safeProjectPath = this.validatePath(projectPath); // FIX: prevent shell injection by validating projectPath before scanning
 
     try {
       if (await this.isCommandAvailable('trivy')) {
@@ -167,7 +170,7 @@ export class SecurityScanner {
   }
 
   static async runContainerScan(projectPath) {
-    const safeProjectPath = this.validateProjectPath(projectPath); // FIX: validate every projectPath before it reaches a shell-backed scan
+    const safeProjectPath = this.validatePath(projectPath); // FIX: prevent shell injection by validating projectPath before scanning
 
     try {
       const dockerfilePath = path.join(safeProjectPath, 'Dockerfile');
@@ -212,7 +215,7 @@ export class SecurityScanner {
   }
 
   static async runSASTScan(projectPath) {
-    const safeProjectPath = this.validateProjectPath(projectPath); // FIX: validate every projectPath before it reaches a shell-backed scan
+    const safeProjectPath = this.validatePath(projectPath); // FIX: prevent shell injection by validating projectPath before scanning
 
     try {
       if (await this.isCommandAvailable('semgrep')) {

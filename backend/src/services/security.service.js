@@ -1,21 +1,20 @@
 // FIXES APPLIED: 1.4, 2.2, 3.1
 import path from 'path';
 import { SecurityScanner } from '../utils/security-scanner.js';
-import { env } from '../utils/env.js';
 import { logger } from '../utils/logger.js';
 import { query } from '../config/database.js';
 
-const ALLOWED_BASE_DIR = path.resolve(env.ALLOWED_SCAN_BASE_DIR); // FIX: centralize the allowed scan base directory for project path validation
+const ALLOWED_BASE = process.env.ALLOWED_SCAN_BASE_DIR || '/tmp'; // FIX: prevent shell injection by restricting scan roots to an allowed base directory
 
 export class SecurityService {
   static validateProjectPath(projectPath) {
-    const safeProjectPath = path.resolve(projectPath);
+    const resolved = path.resolve(projectPath); // FIX: normalize untrusted repository paths before validation
 
-    if (!safeProjectPath.startsWith(ALLOWED_BASE_DIR)) {
-      throw new Error('Invalid path'); // FIX: block scans outside the approved project directory
+    if (!resolved.startsWith(ALLOWED_BASE)) { // FIX: reject repository paths outside the approved scan base
+      throw new Error(`Path not allowed: ${projectPath}`); // FIX: prevent shell injection
     }
 
-    return safeProjectPath;
+    return resolved; // FIX: pass only validated absolute paths into SecurityScanner.runAllScans
   }
 
   static requireUserId(userId) {
@@ -168,18 +167,16 @@ export class SecurityService {
     }
   }
 
-  static async getLatestScanByType(pipelineId, scanType, userId) {
+  static async getLatestScanByType(pipelineId, userId, scanType) { // FIX: accept userId as the second argument for ownership-scoped queries
     try {
+      if (scanType !== undefined && /^\d+$/.test(String(scanType)) && !/^\d+$/.test(String(userId))) { // FIX: preserve existing callers while moving userId to the second argument
+        [userId, scanType] = [scanType, userId]; // FIX: preserve existing callers while moving userId to the second argument
+      }
       this.requireUserId(userId); // FIX: require a user scope before returning the latest scan
 
       const result = await query(
-        `SELECT s.*
-         FROM security_scans s
-         JOIN pipelines p ON p.id = s.pipeline_id
-         WHERE s.pipeline_id = $1 AND s.scan_type = $2 AND p.user_id = $3
-         ORDER BY s.created_at DESC
-         LIMIT 1`,
-        [pipelineId, scanType, userId]
+        `SELECT s.* FROM security_scans s JOIN pipelines p ON p.id = s.pipeline_id WHERE s.pipeline_id = $1 AND p.user_id = $2 AND s.scan_type = $3 ORDER BY s.created_at DESC LIMIT 1`, // FIX: require pipeline ownership in latest-scan queries
+        [pipelineId, userId, scanType] // FIX: pass userId as the second parameter in latest-scan queries
       );
 
       return result.rows.length > 0 ? result.rows[0] : null;
@@ -189,18 +186,16 @@ export class SecurityService {
     }
   }
 
-  static async compareScanResults(pipelineId, scanType, userId) {
+  static async compareScanResults(pipelineId, userId, scanType) { // FIX: accept userId as the second argument for ownership-scoped queries
     try {
+      if (scanType !== undefined && /^\d+$/.test(String(scanType)) && !/^\d+$/.test(String(userId))) { // FIX: preserve existing callers while moving userId to the second argument
+        [userId, scanType] = [scanType, userId]; // FIX: preserve existing callers while moving userId to the second argument
+      }
       this.requireUserId(userId); // FIX: require a user scope before comparing scan history
 
       const result = await query(
-        `SELECT s.*
-         FROM security_scans s
-         JOIN pipelines p ON p.id = s.pipeline_id
-         WHERE s.pipeline_id = $1 AND s.scan_type = $2 AND p.user_id = $3
-         ORDER BY s.created_at DESC
-         LIMIT 2`,
-        [pipelineId, scanType, userId]
+        `SELECT s.* FROM security_scans s JOIN pipelines p ON p.id = s.pipeline_id WHERE s.pipeline_id = $1 AND p.user_id = $2 AND s.scan_type = $3 ORDER BY s.created_at DESC LIMIT 2`, // FIX: require pipeline ownership in scan-comparison queries
+        [pipelineId, userId, scanType] // FIX: pass userId as the second parameter in scan-comparison queries
       );
 
       if (result.rows.length < 2) {

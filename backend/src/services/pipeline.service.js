@@ -29,8 +29,9 @@ export class PipelineService {
   }
 
   static async generatePipeline(repoId, userId, pipelineType, options = {}) {
-    if (!/^\d+$/.test(String(repoId))) {
-      throw new Error('Invalid repoId'); // FIX: block path traversal and malformed repository identifiers before building temp paths
+    const activeScans = await query(`SELECT COUNT(*) FROM pipelines WHERE user_id = $1 AND status = 'scanning'`, [userId]); // FIX: basic rate guard until express-rate-limit is added
+    if (parseInt(activeScans.rows[0].count) >= 3) { // FIX: basic rate guard until express-rate-limit is added
+      throw new Error('Too many active scans. Max 3 concurrent scans per user.'); // FIX: basic rate guard until express-rate-limit is added
     }
 
     let tempRepoPath = null;
@@ -44,8 +45,11 @@ export class PipelineService {
         throw new Error('Repository not found');
       }
 
-      const userResult = await query(
-        'SELECT access_token FROM users WHERE id = $1', // TODO: ENCRYPT access_token with AES-256-GCM before reading from the DB in production // FIX: mark plaintext token access for remediation
+      // TODO: ENCRYPT — access_token must be encrypted with AES-256-GCM // FIX: token encryption placeholder for plaintext DB reads
+      // before production. Use a KMS key or a TOKEN_ENCRYPTION_KEY env var. // FIX: token encryption placeholder for plaintext DB reads
+      // Decrypt here before use, encrypt before INSERT/UPDATE. // FIX: token encryption placeholder for plaintext DB reads
+      const userResult = await query( // FIX: access_token is still being read from the database in plaintext
+        'SELECT access_token FROM users WHERE id = $1',
         [userId]
       );
 
@@ -58,6 +62,9 @@ export class PipelineService {
       let stack = null;
 
       try {
+        if (!/^\d+$/.test(String(repoId))) { // FIX: validate repoId before using it in a filesystem path
+          throw new Error('Invalid repoId'); // FIX: prevent path traversal
+        }
         tempRepoPath = path.join('/tmp', `repo_${repoId}_${Date.now()}`); // FIX: constrain temporary repositories to a controlled base directory
 
         await execFileAsync(
@@ -192,8 +199,11 @@ export class PipelineService {
   }
 
   static async pushToGitHub(pipelineId, userId) {
-    const userResult = await query(
-      'SELECT access_token FROM users WHERE id = $1', // TODO: ENCRYPT access_token with AES-256-GCM before reading from the DB in production // FIX: mark plaintext token access for remediation
+    // TODO: ENCRYPT — access_token must be encrypted with AES-256-GCM // FIX: token encryption placeholder for plaintext DB reads
+    // before production. Use a KMS key or a TOKEN_ENCRYPTION_KEY env var. // FIX: token encryption placeholder for plaintext DB reads
+    // Decrypt here before use, encrypt before INSERT/UPDATE. // FIX: token encryption placeholder for plaintext DB reads
+    const userResult = await query( // FIX: access_token is still being read from the database in plaintext
+      'SELECT access_token FROM users WHERE id = $1',
       [userId]
     );
 

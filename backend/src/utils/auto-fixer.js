@@ -91,15 +91,15 @@ export class AutoFixer {
         let fileModified = false;
 
         for (const finding of findings) {
-          if (!finding.package || !finding.fixedVersion) {
-            continue;
+          if (!finding.package) { // FIX: defer fixedVersion validation to the dedicated semver check below
+            continue; // FIX: skip findings that do not identify a package to patch
           }
 
           const packageName = finding.package;
-          const fixedVersion = String(finding.fixedVersion).trim();
+          const fixedVersion = finding.fixedVersion ? String(finding.fixedVersion).trim() : ''; // FIX: normalize scanner-provided versions before validating them
 
-          if (!/^\d+\.\d+\.\d+/.test(fixedVersion)) {
-            continue; // FIX: skip malformed versions before mutating package.json
+          if (!fixedVersion || !/^\d+\.\d+\.\d+/.test(fixedVersion)) { // FIX: validate scanner-provided versions before patching package.json
+            continue; // FIX: skip malformed or missing version from scanner
           }
 
           const currentVersion = finding.version;
