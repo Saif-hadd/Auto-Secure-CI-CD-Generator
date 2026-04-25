@@ -112,12 +112,21 @@ export class PipelineService {
 
         pipeline = pipelineResult.rows[0];
 
-        scanResult = await SecurityService.scanRepository(projectPath, {
-          scannerType,
-          pipelineId: pipeline.id,
-          userId,
-          dbClient: client // FIX: save scan results within the same transaction as the pipeline insert
-        });
+        const SCAN_TIMEOUT_MS = 60_000; // FIX: prevent infinite hang on slow scanners
+        scanResult = await Promise.race([ // FIX: bound the security scan duration to avoid indefinite pipeline hangs
+          SecurityService.scanRepository(projectPath, { // FIX: race the repository scan against an explicit timeout
+            scannerType,
+            pipelineId: pipeline.id,
+            userId,
+            dbClient: client // FIX: preserve transactional scan persistence while adding a timeout guard
+          }),
+          new Promise((_, reject) => // FIX: create a timeout branch that fails fast when scanners stall
+            setTimeout( // FIX: enforce the 60s maximum scan duration
+              () => reject(new Error('Security scan timed out after 60s')), // FIX: surface a clear timeout error to the existing catch block
+              SCAN_TIMEOUT_MS // FIX: use the shared scan timeout constant
+            )
+          )
+        ]);
 
         await client.query('COMMIT'); // FIX: commit only after the pipeline and initial scan state are both persisted
       } catch (error) {
