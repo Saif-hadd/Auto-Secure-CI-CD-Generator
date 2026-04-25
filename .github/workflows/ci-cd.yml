@@ -238,10 +238,97 @@ jobs:
           sarif_file: 'trivy-backend-image.sarif'
           category: 'trivy-backend-image'
 
+  sbom-source:
+    name: SBOM Source
+    runs-on: ubuntu-latest
+    needs: [lint-and-test-frontend, lint-and-test-backend]
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create SBOM workspace
+        run: mkdir -p sbom
+
+      - name: Generate repository SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom/repository.spdx.json
+          upload-artifact: false
+          dependency-snapshot: ${{ github.event_name == 'push' }}
+
+      - name: Upload source SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-source
+          path: sbom/repository.spdx.json
+          retention-days: 90
+
+  sbom-images:
+    name: SBOM Images
+    runs-on: ubuntu-latest
+    needs: docker-build
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare Docker image tags
+        id: sbom-image-tags
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          IMAGE_NAME="${REPOSITORY,,}"
+          echo "frontend=${{ env.REGISTRY }}/${IMAGE_NAME}-frontend:${SHA}" >> "$GITHUB_OUTPUT"
+          echo "backend=${{ env.REGISTRY }}/${IMAGE_NAME}-backend:${SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Create SBOM workspace
+        run: mkdir -p sbom
+
+      - name: Generate frontend image SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.sbom-image-tags.outputs.frontend }}
+          format: spdx-json
+          output-file: sbom/frontend-image.spdx.json
+          upload-artifact: false
+
+      - name: Generate backend image SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.sbom-image-tags.outputs.backend }}
+          format: spdx-json
+          output-file: sbom/backend-image.spdx.json
+          upload-artifact: false
+
+      - name: Upload image SBOMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-images
+          path: sbom/
+          retention-days: 90
+
   security-summary:
     name: Security Summary
     runs-on: ubuntu-latest
-    needs: [security-analysis, dependency-audit, docker-build]
+    needs: [security-analysis, dependency-audit, docker-build, sbom-source, sbom-images]
     if: always()
 
     steps:
@@ -265,7 +352,10 @@ jobs:
           echo "- Security Analysis: ${{ needs.security-analysis.result }}" >> security-summary.md
           echo "- Dependency Audit: ${{ needs.dependency-audit.result }}" >> security-summary.md
           echo "- Docker Build & Scan: ${{ needs.docker-build.result }}" >> security-summary.md
+          echo "- Source SBOM: ${{ needs.sbom-source.result }}" >> security-summary.md
+          echo "- Image SBOM: ${{ needs.sbom-images.result }}" >> security-summary.md
           echo "" >> security-summary.md
+          echo "SBOM artifacts are available in the workflow artifacts." >> security-summary.md
           echo "View detailed results in the Security tab of this repository." >> security-summary.md
 
       - name: Upload security summary
