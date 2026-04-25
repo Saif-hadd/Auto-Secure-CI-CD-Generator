@@ -272,6 +272,7 @@ jobs:
     needs: [lint-and-test-frontend, lint-and-test-backend]
     permissions:
       contents: write
+      security-events: write
 
     steps:
       - name: Checkout code
@@ -289,11 +290,30 @@ jobs:
           upload-artifact: false
           dependency-snapshot: ${{ github.event_name == 'push' }}
 
+      - name: Block on critical vulnerabilities in source SBOM
+        id: scan-source-sbom
+        uses: anchore/scan-action@v7
+        with:
+          sbom: sbom/repository.spdx.json
+          fail-build: true
+          severity-cutoff: critical
+          output-format: sarif
+          output-file: sbom/source-sbom-vulnerabilities.sarif
+
+      - name: Upload source SBOM vulnerability results
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('sbom/source-sbom-vulnerabilities.sarif') != ''
+        with:
+          sarif_file: sbom/source-sbom-vulnerabilities.sarif
+          category: 'grype-source-sbom'
+
       - name: Upload source SBOM
         uses: actions/upload-artifact@v4
         with:
           name: sbom-source
-          path: sbom/repository.spdx.json
+          path: |
+            sbom/repository.spdx.json
+            sbom/source-sbom-vulnerabilities.sarif
           retention-days: 90
 
   sbom-images:
@@ -307,6 +327,7 @@ jobs:
       attestations: write
       artifact-metadata: write
       packages: write
+      security-events: write
 
     steps:
       - name: Checkout code
@@ -330,6 +351,23 @@ jobs:
           output-file: sbom/frontend-image.spdx.json
           upload-artifact: false
 
+      - name: Block on critical vulnerabilities in frontend image SBOM
+        id: scan-frontend-image-sbom
+        uses: anchore/scan-action@v7
+        with:
+          sbom: sbom/frontend-image.spdx.json
+          fail-build: true
+          severity-cutoff: critical
+          output-format: sarif
+          output-file: sbom/frontend-image-sbom-vulnerabilities.sarif
+
+      - name: Upload frontend image SBOM vulnerability results
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('sbom/frontend-image-sbom-vulnerabilities.sarif') != ''
+        with:
+          sarif_file: sbom/frontend-image-sbom-vulnerabilities.sarif
+          category: 'grype-frontend-image-sbom'
+
       - name: Generate backend image SBOM
         uses: anchore/sbom-action@v0
         with:
@@ -337,6 +375,23 @@ jobs:
           format: spdx-json
           output-file: sbom/backend-image.spdx.json
           upload-artifact: false
+
+      - name: Block on critical vulnerabilities in backend image SBOM
+        id: scan-backend-image-sbom
+        uses: anchore/scan-action@v7
+        with:
+          sbom: sbom/backend-image.spdx.json
+          fail-build: true
+          severity-cutoff: critical
+          output-format: sarif
+          output-file: sbom/backend-image-sbom-vulnerabilities.sarif
+
+      - name: Upload backend image SBOM vulnerability results
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('sbom/backend-image-sbom-vulnerabilities.sarif') != ''
+        with:
+          sarif_file: sbom/backend-image-sbom-vulnerabilities.sarif
+          category: 'grype-backend-image-sbom'
 
       - name: Attest frontend image SBOM
         uses: actions/attest@v4
@@ -391,6 +446,7 @@ jobs:
           echo "- Source SBOM: ${{ needs.sbom-source.result }}" >> security-summary.md
           echo "- Image SBOM: ${{ needs.sbom-images.result }}" >> security-summary.md
           echo "" >> security-summary.md
+          echo "Critical vulnerabilities detected through SBOM scanning automatically block the pipeline." >> security-summary.md
           echo "Image provenance and SBOM attestations are published to GHCR." >> security-summary.md
           echo "SBOM artifacts are available in the workflow artifacts." >> security-summary.md
           echo "View detailed results in the Security tab of this repository." >> security-summary.md
@@ -419,7 +475,7 @@ jobs:
   deploy-staging:
     name: Deploy to Staging
     runs-on: ubuntu-latest
-    needs: [lint-and-test-frontend, lint-and-test-backend, docker-build]
+    needs: [lint-and-test-frontend, lint-and-test-backend, docker-build, sbom-source, sbom-images]
     if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
     environment:
       name: staging
@@ -437,7 +493,7 @@ jobs:
   deploy-production:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: [lint-and-test-frontend, lint-and-test-backend, docker-build, security-summary]
+    needs: [lint-and-test-frontend, lint-and-test-backend, docker-build, sbom-source, sbom-images, security-summary]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     environment:
       name: production
