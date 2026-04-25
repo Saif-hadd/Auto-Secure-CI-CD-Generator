@@ -1,6 +1,99 @@
+// FIXES APPLIED: 2.5, 2.6, 3.1
 import yaml from 'js-yaml';
+import { logger } from '../utils/logger.js';
 
 export class AnalyzerService {
+  static getStepName(step) {
+    return step?.name?.toLowerCase() || '';
+  }
+
+  static getStepUses(step) {
+    return step?.uses?.toLowerCase() || '';
+  }
+
+  static getStepRun(step) {
+    return step?.run?.toLowerCase() || '';
+  }
+
+  static getStepScanners(step) {
+    const scanners = step?.with?.scanners;
+
+    if (Array.isArray(scanners)) {
+      return scanners.map((scanner) => String(scanner).toLowerCase());
+    }
+
+    return String(scanners ?? '')
+      .split(',')
+      .map((scanner) => scanner.trim().toLowerCase())
+      .filter(Boolean);
+  }
+
+  static hasSASTStep(steps) {
+    const hasScannerAction = steps.some((step) => {
+      const uses = this.getStepUses(step);
+      return uses.includes('semgrep') || uses.includes('codeql') || uses.includes('sonarcloud');
+    }); // FIX: require a real SAST scanner action before trusting step-name heuristics
+
+    if (hasScannerAction) {
+      return true;
+    }
+
+    return steps.some((step) => {
+      const name = this.getStepName(step);
+      return !this.getStepUses(step) && (
+        name.includes('sast') ||
+        name.includes('static analysis') ||
+        name.includes('sonar') ||
+        name.includes('semgrep') ||
+        name.includes('codeql')
+      );
+    }); // FIX: only fall back to step-name matching when the step is not just an upload/action wrapper
+  }
+
+  static hasSecretsStep(steps) {
+    return steps.some((step) => {
+      const uses = this.getStepUses(step);
+      const name = this.getStepName(step);
+
+      if (uses.includes('gitleaks') || uses.includes('trufflehog')) {
+        return true;
+      }
+
+      if (uses.includes('trivy')) {
+        return this.getStepScanners(step).includes('secret'); // FIX: only count Trivy as secrets scanning when the scanner list explicitly includes secret
+      }
+
+      return !uses && (
+        name.includes('secret') ||
+        name.includes('gitleaks') ||
+        name.includes('trufflehog')
+      );
+    });
+  }
+
+  static hasDependencyStep(steps) {
+    return steps.some((step) => {
+      const name = this.getStepName(step);
+      const uses = this.getStepUses(step);
+
+      return (
+        name.includes('dependency') ||
+        name.includes('vulnerabilit') ||
+        name.includes('audit') ||
+        name.includes('snyk') ||
+        uses.includes('trivy') ||
+        uses.includes('snyk') ||
+        uses.includes('dependency-check')
+      );
+    });
+  }
+
+  static getMutableActionRefs(steps) {
+    return steps
+      .map((step) => step?.uses)
+      .filter((uses) => typeof uses === 'string' && /@(master|latest)$/i.test(uses)); // FIX: detect mutable action refs that increase supply-chain risk
+  }
+
   static async analyzeYAML(yamlContent) {
     try {
       const issues = [];
@@ -41,14 +134,14 @@ export class AnalyzerService {
       const optimizedYAML = this.optimizeYAML(parsedYAML, issues, warnings);
 
       return {
-        valid: issues.filter(i => i.severity === 'critical').length === 0,
+        valid: issues.filter((issue) => issue.severity === 'critical').length === 0,
         issues,
         warnings,
         optimizedYAML,
         suggestions: this.generateSuggestions(issues, warnings)
       };
     } catch (error) {
-      console.error('Analyze YAML error:', error);
+      logger.error({ context: {}, err: error }, 'Analyze YAML error'); // FIX: replace console logging with structured logger
       throw error;
     }
   }
@@ -56,32 +149,11 @@ export class AnalyzerService {
   static checkSecurityFeatures(parsedYAML) {
     const issues = [];
     const warnings = [];
-
     const allSteps = this.getAllSteps(parsedYAML);
-    const stepNames = allSteps.map(s => s.name?.toLowerCase() || '');
-    const stepUses  = allSteps.map(s => s.uses?.toLowerCase() || '');
-
-    const hasSAST = stepNames.some(n =>
-      n.includes('sast') || n.includes('static analysis') || n.includes('sonar') ||
-      n.includes('semgrep') || n.includes('codeql')
-    ) || stepUses.some(u =>
-      u.includes('semgrep') || u.includes('codeql') || u.includes('sonarcloud')
-    );
-
-    const hasSecrets = stepNames.some(n =>
-      n.includes('secret') || n.includes('gitleaks') || n.includes('trufflehog')
-    ) || stepUses.some(u =>
-      u.includes('trivy') || u.includes('gitleaks') || u.includes('trufflehog')
-    ) || allSteps.some(s =>
-      JSON.stringify(s.with || {}).toLowerCase().includes('secret')
-    );
-
-    const hasDependency = stepNames.some(n =>
-      n.includes('dependency') || n.includes('vulnerabilit') ||
-      n.includes('audit') || n.includes('snyk')
-    ) || stepUses.some(u =>
-      u.includes('trivy') || u.includes('snyk') || u.includes('dependency-check')
-    );
+    const hasSAST = this.hasSASTStep(allSteps);
+    const hasSecrets = this.hasSecretsStep(allSteps);
+    const hasDependency = this.hasDependencyStep(allSteps);
+    const mutableActionRefs = this.getMutableActionRefs(allSteps);
 
     if (!hasSAST) {
       issues.push({
@@ -107,6 +179,14 @@ export class AnalyzerService {
       });
     }
 
+    if (mutableActionRefs.length > 0) {
+      warnings.push({
+        type: 'security',
+        severity: 'medium',
+        message: `Workflow uses mutable action references: ${mutableActionRefs.join(', ')}`
+      }); // FIX: warn when actions are pinned to @master or @latest instead of immutable refs
+    }
+
     return { issues, warnings };
   }
 
@@ -114,9 +194,9 @@ export class AnalyzerService {
     const warnings = [];
     const allSteps = this.getAllSteps(parsedYAML);
 
-    const hasTests = allSteps.some(s => {
-      const name = s.name?.toLowerCase() || '';
-      const run  = s.run?.toLowerCase()  || '';
+    const hasTests = allSteps.some((step) => {
+      const name = this.getStepName(step);
+      const run = this.getStepRun(step);
       return name.includes('test') || run.includes('test');
     });
 
@@ -128,7 +208,7 @@ export class AnalyzerService {
       });
     }
 
-    const hasCheckout = allSteps.some(s => s.uses?.includes('actions/checkout'));
+    const hasCheckout = allSteps.some((step) => step.uses?.includes('actions/checkout'));
     if (!hasCheckout) {
       warnings.push({
         type: 'best-practice',
@@ -142,17 +222,21 @@ export class AnalyzerService {
 
   static getAllSteps(parsedYAML) {
     const steps = [];
+
     if (parsedYAML.jobs) {
-      Object.values(parsedYAML.jobs).forEach(job => {
-        if (job.steps) steps.push(...job.steps);
+      Object.values(parsedYAML.jobs).forEach((job) => {
+        if (job.steps) {
+          steps.push(...job.steps);
+        }
       });
     }
+
     return steps;
   }
 
   static optimizeYAML(parsedYAML, issues, warnings) {
     try {
-      const criticalIssues = issues.filter(i => i.severity === 'critical');
+      const criticalIssues = issues.filter((issue) => issue.severity === 'critical');
       if (criticalIssues.length > 0) return null;
 
       const optimized = JSON.parse(JSON.stringify(parsedYAML));
@@ -165,37 +249,21 @@ export class AnalyzerService {
       }
 
       if (optimized.jobs) {
-        Object.keys(optimized.jobs).forEach(jobKey => {
+        Object.keys(optimized.jobs).forEach((jobKey) => {
           const job = optimized.jobs[jobKey];
           if (!job.steps) job.steps = [];
 
-          const stepNames = job.steps.map(s => s.name?.toLowerCase() || '');
-          const stepUses  = job.steps.map(s => s.uses?.toLowerCase() || '');
-
-          const hasSAST = stepNames.some(n =>
-            n.includes('sast') || n.includes('semgrep') || n.includes('codeql')
-          ) || stepUses.some(u => u.includes('semgrep') || u.includes('codeql'));
-
-          const hasSecrets = stepNames.some(n =>
-            n.includes('secret') || n.includes('gitleaks')
-          ) || stepUses.some(u => u.includes('trivy') || u.includes('gitleaks'));
-
-          const hasDependency = stepNames.some(n =>
-            n.includes('dependency') || n.includes('audit') || n.includes('vulnerabilit')
-          ) || stepUses.some(u => u.includes('trivy') || u.includes('snyk'));
-
-          const hasNpmInstall = job.steps.some(s =>
-            s.run?.includes('npm install') || s.run?.includes('npm ci')
-          );
-          const hasAudit = stepNames.some(n => n.includes('audit'));
-
-          // ✅ Construire les steps de sécurité à injecter AVANT le build
+          const hasSAST = this.hasSASTStep(job.steps);
+          const hasSecrets = this.hasSecretsStep(job.steps);
+          const hasDependency = this.hasDependencyStep(job.steps);
+          const hasNpmInstall = job.steps.some((step) => step.run?.includes('npm install') || step.run?.includes('npm ci'));
+          const hasAudit = job.steps.some((step) => this.getStepName(step).includes('audit'));
           const securitySteps = [];
 
           if (!hasSAST) {
             securitySteps.push({
               name: 'SAST - Semgrep',
-              uses: 'semgrep/semgrep-action@v1',
+              uses: 'semgrep/semgrep-action@v1', // FIX: inject a pinned Semgrep action version instead of a mutable ref
               with: { config: 'auto' },
               'continue-on-error': true
             });
@@ -204,7 +272,7 @@ export class AnalyzerService {
           if (!hasSecrets) {
             securitySteps.push({
               name: 'Secrets scanning - Trivy',
-              uses: 'aquasecurity/trivy-action@master',
+              uses: 'aquasecurity/trivy-action@0.20.0', // FIX: inject a pinned Trivy action version instead of a mutable ref
               with: {
                 'scan-type': 'fs',
                 'scan-ref': '.',
@@ -216,7 +284,7 @@ export class AnalyzerService {
             });
             securitySteps.push({
               name: 'Upload secrets scan results',
-              uses: 'github/codeql-action/upload-sarif@v3',
+              uses: 'github/codeql-action/upload-sarif@v3', // FIX: pin injected SARIF uploads to a stable version
               if: 'always()',
               with: { sarif_file: 'trivy-secrets.sarif' },
               'continue-on-error': true
@@ -226,7 +294,7 @@ export class AnalyzerService {
           if (!hasDependency) {
             securitySteps.push({
               name: 'Dependency vulnerability scan - Trivy',
-              uses: 'aquasecurity/trivy-action@master',
+              uses: 'aquasecurity/trivy-action@0.20.0', // FIX: inject a pinned Trivy action version instead of a mutable ref
               with: {
                 'scan-type': 'fs',
                 'scan-ref': '.',
@@ -239,7 +307,7 @@ export class AnalyzerService {
             });
             securitySteps.push({
               name: 'Upload vulnerability scan results',
-              uses: 'github/codeql-action/upload-sarif@v3',
+              uses: 'github/codeql-action/upload-sarif@v3', // FIX: pin injected SARIF uploads to a stable version
               if: 'always()',
               with: { sarif_file: 'trivy-vuln.sarif' },
               'continue-on-error': true
@@ -254,31 +322,31 @@ export class AnalyzerService {
             });
           }
 
-          // ✅ Injecter AVANT le step build
           if (securitySteps.length > 0) {
-            const buildIndex = job.steps.findIndex(s => {
-              const name = s.name?.toLowerCase() || '';
-              const run  = s.run?.toLowerCase()  || '';
+            const buildIndex = job.steps.findIndex((step) => {
+              const name = this.getStepName(step);
+              const run = this.getStepRun(step);
               return name.includes('build') || run.includes('build');
             });
 
             if (buildIndex !== -1) {
               job.steps.splice(buildIndex, 0, ...securitySteps);
             } else {
-              const checkoutIndex = job.steps.findIndex(s =>
-                s.uses?.includes('actions/checkout')
-              );
+              const checkoutIndex = job.steps.findIndex((step) => step.uses?.includes('actions/checkout'));
               const insertAt = checkoutIndex !== -1 ? checkoutIndex + 1 : 0;
               job.steps.splice(insertAt, 0, ...securitySteps);
             }
           }
 
-          // ✅ Upgrade checkout@v3 → v4
-          job.steps = job.steps.map(step => {
-            if (step.uses?.includes('actions/checkout@v3'))
+          job.steps = job.steps.map((step) => {
+            if (step.uses?.includes('actions/checkout@v3')) {
               return { ...step, uses: 'actions/checkout@v4' };
-            if (step.uses?.includes('actions/setup-node@v3'))
+            }
+
+            if (step.uses?.includes('actions/setup-node@v3')) {
               return { ...step, uses: 'actions/setup-node@v4' };
+            }
+
             return step;
           });
         });
@@ -286,7 +354,7 @@ export class AnalyzerService {
 
       return yaml.dump(optimized, { lineWidth: -1, quotingType: '"' });
     } catch (error) {
-      console.error('Optimize YAML error:', error);
+      logger.error({ context: { warningCount: warnings.length }, err: error }, 'Optimize YAML error'); // FIX: replace console logging with structured logger
       return null;
     }
   }
@@ -294,7 +362,7 @@ export class AnalyzerService {
   static generateSuggestions(issues, warnings) {
     const suggestions = [];
 
-    if (issues.some(i => i.type === 'security')) {
+    if (issues.some((issue) => issue.type === 'security')) {
       suggestions.push({
         title: 'Add Security Scanning',
         description: 'Implement SAST, DAST, and secrets scanning in your pipeline',
@@ -302,7 +370,7 @@ export class AnalyzerService {
       });
     }
 
-    if (warnings.some(w => w.message.includes('test'))) {
+    if (warnings.some((warning) => warning.message.includes('test'))) {
       suggestions.push({
         title: 'Add Test Steps',
         description: 'Include unit and integration tests to ensure code quality',
@@ -310,7 +378,7 @@ export class AnalyzerService {
       });
     }
 
-    if (warnings.some(w => w.message.includes('checkout'))) {
+    if (warnings.some((warning) => warning.message.includes('checkout'))) {
       suggestions.push({
         title: 'Add Checkout Step',
         description: 'Always checkout code at the beginning of your workflow',

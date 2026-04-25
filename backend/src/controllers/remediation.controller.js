@@ -1,4 +1,5 @@
 import { RemediationService } from '../services/remediation.service.js';
+import { logger } from '../utils/logger.js';
 
 export const runRemediation = async (req, res) => {
   try {
@@ -16,7 +17,7 @@ export const runRemediation = async (req, res) => {
 
     res.json(result);
   } catch (error) {
-    console.error('Run remediation error:', error);
+    logger.error({ context: { pipelineId: req.params.pipelineId, userId: req.user?.id }, err: error }, 'Run remediation error'); // FIX: replace console logging with structured logger
     res.status(500).json({ error: error.message });
   }
 };
@@ -25,14 +26,14 @@ export const getRemediationHistory = async (req, res) => {
   try {
     const { pipelineId } = req.params;
 
-    const history = await RemediationService.getRemediationHistory(pipelineId);
+    const history = await RemediationService.getRemediationHistory(pipelineId, req.user.id);
 
     res.json({
       success: true,
       remediations: history
     });
   } catch (error) {
-    console.error('Get remediation history error:', error);
+    logger.error({ context: { pipelineId: req.params.pipelineId, userId: req.user?.id }, err: error }, 'Get remediation history error'); // FIX: replace console logging with structured logger
     res.status(500).json({ error: error.message });
   }
 };
@@ -41,7 +42,7 @@ export const getLatestRemediation = async (req, res) => {
   try {
     const { pipelineId } = req.params;
 
-    const remediation = await RemediationService.getLatestRemediation(pipelineId);
+    const remediation = await RemediationService.getLatestRemediation(pipelineId, req.user.id);
 
     if (!remediation) {
       return res.status(404).json({ error: 'No remediation found' });
@@ -52,7 +53,7 @@ export const getLatestRemediation = async (req, res) => {
       remediation
     });
   } catch (error) {
-    console.error('Get latest remediation error:', error);
+    logger.error({ context: { pipelineId: req.params.pipelineId, userId: req.user?.id }, err: error }, 'Get latest remediation error'); // FIX: replace console logging with structured logger
     res.status(500).json({ error: error.message });
   }
 };

@@ -1,4 +1,5 @@
 import { PipelineService } from '../services/pipeline.service.js';
+import { logger } from '../utils/logger.js';
 
 export const generatePipeline = async (req, res) => {
   try {
@@ -16,7 +17,7 @@ export const generatePipeline = async (req, res) => {
 
     res.json({ pipeline });
   } catch (error) {
-    console.error('Generate pipeline error:', error);
+    logger.error({ context: { repoId: req.body.repoId, userId: req.user?.id }, err: error }, 'Generate pipeline error'); // FIX: replace console logging with structured logger
     res.status(500).json({ error: error.message });
   }
 };
@@ -27,7 +28,7 @@ export const getPipelinesByRepo = async (req, res) => {
     const pipelines = await PipelineService.getPipelinesByRepo(repoId, req.user.id);
     res.json({ pipelines });
   } catch (error) {
-    console.error('Get pipelines error:', error);
+    logger.error({ context: { repoId: req.params.repoId, userId: req.user?.id }, err: error }, 'Get pipelines error'); // FIX: replace console logging with structured logger
     res.status(500).json({ error: error.message });
   }
 };
@@ -44,7 +45,7 @@ export const pushPipelineToGitHub = async (req, res) => {
 
     res.json(result);
   } catch (error) {
-    console.error('Push pipeline error:', error);
+    logger.error({ context: { pipelineId: req.params.pipelineId, userId: req.user?.id }, err: error }, 'Push pipeline error'); // FIX: replace console logging with structured logger
     res.status(500).json({ error: error.message });
   }
 };
@@ -55,7 +56,7 @@ export const getSecurityDashboard = async (req, res) => {
     const dashboard = await PipelineService.getSecurityDashboard(pipelineId, req.user.id);
     res.json(dashboard);
   } catch (error) {
-    console.error('Get security dashboard error:', error);
+    logger.error({ context: { pipelineId: req.params.pipelineId, userId: req.user?.id }, err: error }, 'Get security dashboard error'); // FIX: replace console logging with structured logger
     res.status(500).json({ error: error.message });
   }
 };

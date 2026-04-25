@@ -1,7 +1,9 @@
+// FIXES APPLIED: 1.8, 2.2, 2.3, 3.1
 import axios from 'axios';
 import { query } from '../config/database.js';
 import { AutoFixer } from '../utils/auto-fixer.js';
 import { SecurityService } from './security.service.js';
+import { logger } from '../utils/logger.js';
 
 export class RemediationService {
   static async runAutoRemediation(pipelineId, userId, accessToken, projectPath) {
@@ -26,7 +28,7 @@ export class RemediationService {
         repo_url: row.repo_url
       };
 
-      const scanHistory = await SecurityService.getScanHistory(pipelineId);
+      const scanHistory = await SecurityService.getScanHistory(pipelineId, userId); // FIX: enforce resource ownership when loading scan history for remediation
 
       if (scanHistory.length === 0) {
         return {
@@ -35,7 +37,7 @@ export class RemediationService {
         };
       }
 
-      const scanResults = scanHistory.map(scan => ({
+      const scanResults = scanHistory.map((scan) => ({
         scan_type: scan.scan_type,
         vulnerabilities_count: scan.vulnerabilities_count,
         risk_level: scan.risk_level,
@@ -54,7 +56,7 @@ export class RemediationService {
         };
       }
 
-      const securityDashboard = await this.getSecurityScore(pipelineId);
+      const securityDashboard = await this.getSecurityScore(pipelineId, userId); // FIX: enforce resource ownership when calculating remediation security score
       const prDescription = AutoFixer.generatePRDescription(
         fixes.changes,
         securityDashboard?.summary?.securityScore
@@ -81,7 +83,7 @@ export class RemediationService {
           : 'Fixes prepared but PR creation failed'
       };
     } catch (error) {
-      console.error('Auto-remediation error:', error);
+      logger.error({ context: { pipelineId, userId }, err: error }, 'Auto-remediation error'); // FIX: replace console logging with structured logger
       throw new Error(`Auto-remediation failed: ${error.message}`);
     }
   }
@@ -94,7 +96,8 @@ export class RemediationService {
       const baseRefResponse = await axios.get(
         `https://api.github.com/repos/${repository.repo_full_name}/git/ref/heads/${baseBranch}`,
         {
-          headers: { Authorization: `Bearer ${accessToken}` }
+          headers: { Authorization: `Bearer ${accessToken}` },
+          timeout: 15000 // FIX: bound GitHub API calls so remediation does not hang indefinitely
         }
       );
 
@@ -107,13 +110,16 @@ export class RemediationService {
           sha: baseSha
         },
         {
-          headers: { Authorization: `Bearer ${accessToken}` }
+          headers: { Authorization: `Bearer ${accessToken}` },
+          timeout: 15000 // FIX: bound GitHub API calls so remediation does not hang indefinitely
         }
       );
 
       const filesToCommit = [];
 
-      if (fixes.packageJsonContent) {
+      if (Array.isArray(fixes.packageJsonFiles) && fixes.packageJsonFiles.length > 0) {
+        filesToCommit.push(...fixes.packageJsonFiles); // FIX: support committing multiple package.json files for monorepo remediations
+      } else if (fixes.packageJsonContent) {
         filesToCommit.push({
           path: 'package.json',
           content: fixes.packageJsonContent
@@ -134,7 +140,8 @@ export class RemediationService {
           const existingFileResponse = await axios.get(
             `https://api.github.com/repos/${repository.repo_full_name}/contents/${file.path}?ref=${branchName}`,
             {
-              headers: { Authorization: `Bearer ${accessToken}` }
+              headers: { Authorization: `Bearer ${accessToken}` },
+              timeout: 15000 // FIX: bound GitHub API calls so remediation does not hang indefinitely
             }
           );
 
@@ -147,7 +154,8 @@ export class RemediationService {
               branch: branchName
             },
             {
-              headers: { Authorization: `Bearer ${accessToken}` }
+              headers: { Authorization: `Bearer ${accessToken}` },
+              timeout: 15000 // FIX: bound GitHub API calls so remediation does not hang indefinitely
             }
           );
         } catch (error) {
@@ -160,7 +168,8 @@ export class RemediationService {
                 branch: branchName
               },
               {
-                headers: { Authorization: `Bearer ${accessToken}` }
+                headers: { Authorization: `Bearer ${accessToken}` },
+                timeout: 15000 // FIX: bound GitHub API calls so remediation does not hang indefinitely
               }
             );
           } else {
@@ -179,7 +188,8 @@ export class RemediationService {
           maintainer_can_modify: true
         },
         {
-          headers: { Authorization: `Bearer ${accessToken}` }
+          headers: { Authorization: `Bearer ${accessToken}` },
+          timeout: 15000 // FIX: bound GitHub API calls so remediation does not hang indefinitely
         }
       );
 
@@ -190,7 +200,10 @@ export class RemediationService {
         branch_name: branchName
       };
     } catch (error) {
-      console.error('Create PR error:', error.response?.data || error.message);
+      logger.error(
+        { context: { repoFullName: repository.repo_full_name }, err: error.response?.data || error },
+        'Create remediation PR error'
+      ); // FIX: replace console logging with structured logger
       return {
         success: false,
         error: error.message,
@@ -224,18 +237,22 @@ export class RemediationService {
         ]
       );
     } catch (error) {
-      console.error('Save remediation result error:', error);
+      logger.error({ context: { pipelineId }, err: error }, 'Save remediation result error'); // FIX: replace console logging with structured logger
     }
   }
 
-  static async getRemediationHistory(pipelineId) {
+  static async getRemediationHistory(pipelineId, userId) {
     try {
       const result = await query(
-        'SELECT * FROM remediations WHERE pipeline_id = $1 ORDER BY created_at DESC',
-        [pipelineId]
-      );
+        `SELECT r.*
+         FROM remediations r
+         JOIN pipelines p ON p.id = r.pipeline_id
+         WHERE r.pipeline_id = $1 AND p.user_id = $2
+         ORDER BY r.created_at DESC`,
+        [pipelineId, userId]
+      ); // FIX: scope remediation history to the owning user
 
-      return result.rows.map(row => ({
+      return result.rows.map((row) => ({
         id: row.id,
         files_updated: row.files_updated,
         changes: row.changes,
@@ -246,20 +263,22 @@ export class RemediationService {
         created_at: row.created_at
       }));
     } catch (error) {
-      console.error('Get remediation history error:', error);
+      logger.error({ context: { pipelineId, userId }, err: error }, 'Get remediation history error'); // FIX: replace console logging with structured logger
       return [];
     }
   }
 
-  static async getLatestRemediation(pipelineId) {
+  static async getLatestRemediation(pipelineId, userId) {
     try {
       const result = await query(
-        `SELECT * FROM remediations
-         WHERE pipeline_id = $1
-         ORDER BY created_at DESC
+        `SELECT r.*
+         FROM remediations r
+         JOIN pipelines p ON p.id = r.pipeline_id
+         WHERE r.pipeline_id = $1 AND p.user_id = $2
+         ORDER BY r.created_at DESC
          LIMIT 1`,
-        [pipelineId]
-      );
+        [pipelineId, userId]
+      ); // FIX: scope remediation lookups to the owning user
 
       if (result.rows.length === 0) {
         return null;
@@ -277,26 +296,29 @@ export class RemediationService {
         created_at: row.created_at
       };
     } catch (error) {
-      console.error('Get latest remediation error:', error);
+      logger.error({ context: { pipelineId, userId }, err: error }, 'Get latest remediation error'); // FIX: replace console logging with structured logger
       return null;
     }
   }
 
-  static async getSecurityScore(pipelineId) {
+  static async getSecurityScore(pipelineId, userId) {
     try {
       const result = await query(
-        'SELECT * FROM pipelines WHERE id = $1',
-        [pipelineId]
-      );
+        'SELECT * FROM pipelines WHERE id = $1 AND user_id = $2',
+        [pipelineId, userId]
+      ); // FIX: scope security score lookups to the owning user
 
       if (result.rows.length === 0) {
         return null;
       }
 
       const scansResult = await query(
-        'SELECT * FROM security_scans WHERE pipeline_id = $1',
-        [pipelineId]
-      );
+        `SELECT s.*
+         FROM security_scans s
+         JOIN pipelines p ON p.id = s.pipeline_id
+         WHERE s.pipeline_id = $1 AND p.user_id = $2`,
+        [pipelineId, userId]
+      ); // FIX: scope scan aggregation to the owning user
 
       const scans = scansResult.rows;
       const totalVulnerabilities = scans.reduce((sum, scan) => sum + scan.vulnerabilities_count, 0);
@@ -304,11 +326,11 @@ export class RemediationService {
       return {
         summary: {
           totalVulnerabilities,
-          securityScore: Math.max(0, 100 - totalVulnerabilities * 5)
+          securityScore: SecurityService.calculateSecurityScore(scans) // FIX: reuse the severity-weighted security score calculation instead of duplicating a flat formula
         }
       };
     } catch (error) {
-      console.error('Get security score error:', error);
+      logger.error({ context: { pipelineId, userId }, err: error }, 'Get security score error'); // FIX: replace console logging with structured logger
       return null;
     }
   }

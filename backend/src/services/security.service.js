@@ -1,18 +1,42 @@
+// FIXES APPLIED: 1.4, 2.2, 3.1
+import path from 'path';
 import { SecurityScanner } from '../utils/security-scanner.js';
+import { env } from '../utils/env.js';
+import { logger } from '../utils/logger.js';
 import { query } from '../config/database.js';
 
+const ALLOWED_BASE_DIR = path.resolve(env.ALLOWED_SCAN_BASE_DIR); // FIX: centralize the allowed scan base directory for project path validation
+
 export class SecurityService {
+  static validateProjectPath(projectPath) {
+    const safeProjectPath = path.resolve(projectPath);
+
+    if (!safeProjectPath.startsWith(ALLOWED_BASE_DIR)) {
+      throw new Error('Invalid path'); // FIX: block scans outside the approved project directory
+    }
+
+    return safeProjectPath;
+  }
+
+  static requireUserId(userId) {
+    if (!userId) {
+      throw new Error('userId is required'); // FIX: enforce user scoping for security history lookups
+    }
+  }
+
   static async scanRepository(repositoryPath, options = {}) {
     try {
       const {
         scannerType = 'trivy',
-        pipelineId = null
+        pipelineId = null,
+        dbClient = null
       } = options;
 
-      const scanResults = await SecurityScanner.runAllScans(repositoryPath, scannerType);
+      const safeProjectPath = this.validateProjectPath(repositoryPath); // FIX: validate every projectPath before invoking shell-backed scanners
+      const scanResults = await SecurityScanner.runAllScans(safeProjectPath, scannerType);
 
       if (pipelineId) {
-        await this.saveScanResults(pipelineId, scanResults);
+        await this.saveScanResults(pipelineId, scanResults, dbClient);
       }
 
       return {
@@ -21,7 +45,7 @@ export class SecurityService {
         summary: this.generateSummary(scanResults)
       };
     } catch (error) {
-      console.error('Security scan error:', error);
+      logger.error({ context: { repositoryPath, pipelineId: options.pipelineId }, err: error }, 'Security scan error'); // FIX: replace console logging with structured logger
       throw new Error(`Security scan failed: ${error.message}`);
     }
   }
@@ -37,20 +61,22 @@ export class SecurityService {
         throw new Error('Repository not found');
       }
 
-      const repository = repoResult.rows[0];
       const projectPath = options.projectPath || process.cwd();
+      const safeProjectPath = this.validateProjectPath(projectPath); // FIX: validate projectPath before delegating to scanner orchestration
 
-      return await this.scanRepository(projectPath, options);
+      return await this.scanRepository(safeProjectPath, options);
     } catch (error) {
-      console.error('Scan by repo ID error:', error);
+      logger.error({ context: { repoId, userId }, err: error }, 'Scan by repo ID error'); // FIX: replace console logging with structured logger
       throw error;
     }
   }
 
-  static async saveScanResults(pipelineId, scanResults) {
+  static async saveScanResults(pipelineId, scanResults, dbClient = null) {
     try {
+      const executor = dbClient?.query?.bind(dbClient) || query; // FIX: allow scan persistence to participate in outer transactions
+
       for (const scan of scanResults) {
-        await query(
+        await executor(
           `INSERT INTO security_scans (pipeline_id, scan_type, vulnerabilities_count, risk_level, findings)
            VALUES ($1, $2, $3, $4, $5)`,
           [
@@ -68,7 +94,7 @@ export class SecurityService {
         );
       }
     } catch (error) {
-      console.error('Save scan results error:', error);
+      logger.error({ context: { pipelineId }, err: error }, 'Save scan results error'); // FIX: replace console logging with structured logger
       throw error;
     }
   }
@@ -79,12 +105,10 @@ export class SecurityService {
       0
     );
 
-    const riskLevels = scanResults.map(scan => scan.risk_level);
+    const riskLevels = scanResults.map((scan) => scan.risk_level);
     const overallRisk = this.calculateOverallRisk(riskLevels);
-
     const securityScore = this.calculateSecurityScore(scanResults);
-
-    const scannerTypes = [...new Set(scanResults.map(scan => scan.scanner))];
+    const scannerTypes = [...new Set(scanResults.map((scan) => scan.scanner))];
 
     return {
       totalVulnerabilities,
@@ -124,45 +148,59 @@ export class SecurityService {
     return Math.max(0, Math.min(100, score));
   }
 
-  static async getScanHistory(pipelineId) {
+  static async getScanHistory(pipelineId, userId) {
     try {
+      this.requireUserId(userId); // FIX: require a user scope before returning scan history
+
       const result = await query(
-        'SELECT * FROM security_scans WHERE pipeline_id = $1 ORDER BY created_at DESC',
-        [pipelineId]
+        `SELECT s.*
+         FROM security_scans s
+         JOIN pipelines p ON p.id = s.pipeline_id
+         WHERE s.pipeline_id = $1 AND p.user_id = $2
+         ORDER BY s.created_at DESC`,
+        [pipelineId, userId]
       );
 
       return result.rows;
     } catch (error) {
-      console.error('Get scan history error:', error);
+      logger.error({ context: { pipelineId, userId }, err: error }, 'Get scan history error'); // FIX: replace console logging with structured logger
       throw error;
     }
   }
 
-  static async getLatestScanByType(pipelineId, scanType) {
+  static async getLatestScanByType(pipelineId, scanType, userId) {
     try {
+      this.requireUserId(userId); // FIX: require a user scope before returning the latest scan
+
       const result = await query(
-        `SELECT * FROM security_scans
-         WHERE pipeline_id = $1 AND scan_type = $2
-         ORDER BY created_at DESC
+        `SELECT s.*
+         FROM security_scans s
+         JOIN pipelines p ON p.id = s.pipeline_id
+         WHERE s.pipeline_id = $1 AND s.scan_type = $2 AND p.user_id = $3
+         ORDER BY s.created_at DESC
          LIMIT 1`,
-        [pipelineId, scanType]
+        [pipelineId, scanType, userId]
       );
 
       return result.rows.length > 0 ? result.rows[0] : null;
     } catch (error) {
-      console.error('Get latest scan error:', error);
+      logger.error({ context: { pipelineId, userId, scanType }, err: error }, 'Get latest scan error'); // FIX: replace console logging with structured logger
       throw error;
     }
   }
 
-  static async compareScanResults(pipelineId, scanType) {
+  static async compareScanResults(pipelineId, scanType, userId) {
     try {
+      this.requireUserId(userId); // FIX: require a user scope before comparing scan history
+
       const result = await query(
-        `SELECT * FROM security_scans
-         WHERE pipeline_id = $1 AND scan_type = $2
-         ORDER BY created_at DESC
+        `SELECT s.*
+         FROM security_scans s
+         JOIN pipelines p ON p.id = s.pipeline_id
+         WHERE s.pipeline_id = $1 AND s.scan_type = $2 AND p.user_id = $3
+         ORDER BY s.created_at DESC
          LIMIT 2`,
-        [pipelineId, scanType]
+        [pipelineId, scanType, userId]
       );
 
       if (result.rows.length < 2) {
@@ -190,7 +228,7 @@ export class SecurityService {
         trend: this.calculateTrend(previous, latest)
       };
     } catch (error) {
-      console.error('Compare scan results error:', error);
+      logger.error({ context: { pipelineId, userId, scanType }, err: error }, 'Compare scan results error'); // FIX: replace console logging with structured logger
       throw error;
     }
   }
@@ -237,7 +275,7 @@ export class SecurityService {
         [pipelineId]
       );
     } catch (error) {
-      console.error('Delete scans error:', error);
+      logger.error({ context: { pipelineId }, err: error }, 'Delete scans error'); // FIX: replace console logging with structured logger
       throw error;
     }
   }

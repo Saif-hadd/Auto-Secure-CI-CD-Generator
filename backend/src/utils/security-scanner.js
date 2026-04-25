@@ -1,50 +1,76 @@
-import { exec } from 'child_process';
+// FIXES APPLIED: 1.4, 3.1
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
+import { env } from './env.js';
+import { logger } from './logger.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+const ALLOWED_BASE_DIR = path.resolve(env.ALLOWED_SCAN_BASE_DIR); // FIX: centralize the allowed scan base directory for project path validation
 
 export class SecurityScanner {
+  static validateProjectPath(projectPath) {
+    const safeProjectPath = path.resolve(projectPath);
+
+    if (!safeProjectPath.startsWith(ALLOWED_BASE_DIR)) {
+      throw new Error('Invalid path'); // FIX: block project paths outside the approved scan directory
+    }
+
+    return safeProjectPath;
+  }
+
   static async runAllScans(projectPath, scannerType = 'trivy') {
+    const safeProjectPath = this.validateProjectPath(projectPath); // FIX: normalize and validate the project path before dispatching shell-backed scans
+    const scanTypes = ['dependencies', 'secrets', 'container', 'sast'];
+
     const scans = await Promise.allSettled([
-      this.runDependencyScan(projectPath, scannerType),
-      this.runSecretsScan(projectPath),
-      this.runContainerScan(projectPath),
-      this.runSASTScan(projectPath)
+      this.runDependencyScan(safeProjectPath, scannerType),
+      this.runSecretsScan(safeProjectPath),
+      this.runContainerScan(safeProjectPath),
+      this.runSASTScan(safeProjectPath)
     ]);
 
     return scans.map((result, index) => {
       if (result.status === 'fulfilled') {
         return result.value;
-      } else {
-        console.error(`Scan ${index} failed:`, result.reason);
-        return this.getFallbackScan(['dependency', 'secrets', 'container', 'sast'][index]);
       }
+
+      logger.error(
+        { context: { projectPath: safeProjectPath, scanType: scanTypes[index] }, err: result.reason },
+        'Security scan failed'
+      ); // FIX: replace console logging with structured logger
+
+      return this.getFallbackScan(scanTypes[index]);
     });
   }
 
   static async runDependencyScan(projectPath, scannerType = 'trivy') {
+    const safeProjectPath = this.validateProjectPath(projectPath); // FIX: validate every projectPath before it reaches a shell-backed scan
+
     try {
       if (scannerType === 'snyk' && await this.isCommandAvailable('snyk')) {
-        return await this.runSnykDependencyScan(projectPath);
+        return await this.runSnykDependencyScan(safeProjectPath);
       }
 
       if (await this.isCommandAvailable('trivy')) {
-        return await this.runTrivyDependencyScan(projectPath);
+        return await this.runTrivyDependencyScan(safeProjectPath);
       }
 
       return this.getFallbackScan('dependencies');
     } catch (error) {
-      console.error('Dependency scan error:', error);
+      logger.error({ context: { projectPath: safeProjectPath, scannerType }, err: error }, 'Dependency scan error'); // FIX: replace console logging with structured logger
       return this.getFallbackScan('dependencies');
     }
   }
 
   static async runTrivyDependencyScan(projectPath) {
+    const safeProjectPath = this.validateProjectPath(projectPath); // FIX: validate every projectPath before it reaches a shell-backed scan
+
     try {
-      const { stdout } = await execAsync(
-        `trivy fs --format json --scanners vuln ${projectPath}`,
+      const { stdout } = await execFileAsync(
+        'trivy',
+        ['fs', '--format', 'json', '--scanners', 'vuln', safeProjectPath], // FIX: avoid shell interpolation by passing command arguments explicitly
         { timeout: 60000 }
       );
 
@@ -60,16 +86,19 @@ export class SecurityScanner {
         timestamp: new Date().toISOString()
       };
     } catch (error) {
-      console.error('Trivy dependency scan error:', error);
+      logger.error({ context: { projectPath: safeProjectPath }, err: error }, 'Trivy dependency scan error'); // FIX: replace console logging with structured logger
       return this.getFallbackScan('dependencies');
     }
   }
 
   static async runSnykDependencyScan(projectPath) {
+    const safeProjectPath = this.validateProjectPath(projectPath); // FIX: validate every projectPath before it reaches a shell-backed scan
+
     try {
-      const { stdout } = await execAsync(
-        `snyk test --json`,
-        { cwd: projectPath, timeout: 60000 }
+      const { stdout } = await execFileAsync(
+        'snyk',
+        ['test', '--json'], // FIX: avoid shell interpolation by passing command arguments explicitly
+        { cwd: safeProjectPath, timeout: 60000 }
       );
 
       const result = JSON.parse(stdout);
@@ -98,18 +127,22 @@ export class SecurityScanner {
             timestamp: new Date().toISOString()
           };
         } catch (parseError) {
-          console.error('Snyk output parse error:', parseError);
+          logger.error({ context: { projectPath: safeProjectPath }, err: parseError }, 'Snyk output parse error'); // FIX: replace console logging with structured logger
         }
       }
+
       return this.getFallbackScan('dependencies');
     }
   }
 
   static async runSecretsScan(projectPath) {
+    const safeProjectPath = this.validateProjectPath(projectPath); // FIX: validate every projectPath before it reaches a shell-backed scan
+
     try {
       if (await this.isCommandAvailable('trivy')) {
-        const { stdout } = await execAsync(
-          `trivy fs --format json --scanners secret ${projectPath}`,
+        const { stdout } = await execFileAsync(
+          'trivy',
+          ['fs', '--format', 'json', '--scanners', 'secret', safeProjectPath], // FIX: avoid shell interpolation by passing command arguments explicitly
           { timeout: 60000 }
         );
 
@@ -128,14 +161,16 @@ export class SecurityScanner {
 
       return this.getFallbackScan('secrets');
     } catch (error) {
-      console.error('Secrets scan error:', error);
+      logger.error({ context: { projectPath: safeProjectPath }, err: error }, 'Secrets scan error'); // FIX: replace console logging with structured logger
       return this.getFallbackScan('secrets');
     }
   }
 
   static async runContainerScan(projectPath) {
+    const safeProjectPath = this.validateProjectPath(projectPath); // FIX: validate every projectPath before it reaches a shell-backed scan
+
     try {
-      const dockerfilePath = path.join(projectPath, 'Dockerfile');
+      const dockerfilePath = path.join(safeProjectPath, 'Dockerfile');
 
       if (!fs.existsSync(dockerfilePath)) {
         return {
@@ -150,8 +185,9 @@ export class SecurityScanner {
       }
 
       if (await this.isCommandAvailable('trivy')) {
-        const { stdout } = await execAsync(
-          `trivy config --format json ${dockerfilePath}`,
+        const { stdout } = await execFileAsync(
+          'trivy',
+          ['config', '--format', 'json', dockerfilePath], // FIX: avoid shell interpolation by passing command arguments explicitly
           { timeout: 60000 }
         );
 
@@ -170,16 +206,19 @@ export class SecurityScanner {
 
       return this.getFallbackScan('container');
     } catch (error) {
-      console.error('Container scan error:', error);
+      logger.error({ context: { projectPath: safeProjectPath }, err: error }, 'Container scan error'); // FIX: replace console logging with structured logger
       return this.getFallbackScan('container');
     }
   }
 
   static async runSASTScan(projectPath) {
+    const safeProjectPath = this.validateProjectPath(projectPath); // FIX: validate every projectPath before it reaches a shell-backed scan
+
     try {
       if (await this.isCommandAvailable('semgrep')) {
-        const { stdout } = await execAsync(
-          `semgrep --config=auto --json ${projectPath}`,
+        const { stdout } = await execFileAsync(
+          'semgrep',
+          ['--config=auto', '--json', safeProjectPath], // FIX: avoid shell interpolation by passing command arguments explicitly
           { timeout: 90000 }
         );
 
@@ -198,7 +237,7 @@ export class SecurityScanner {
 
       return this.getFallbackScan('sast');
     } catch (error) {
-      console.error('SAST scan error:', error);
+      logger.error({ context: { projectPath: safeProjectPath }, err: error }, 'SAST scan error'); // FIX: replace console logging with structured logger
       return this.getFallbackScan('sast');
     }
   }
@@ -311,8 +350,8 @@ export class SecurityScanner {
       return 'low';
     }
 
-    const criticalCount = vulnerabilities.filter(v => v.severity === 'critical').length;
-    const highCount = vulnerabilities.filter(v => v.severity === 'high').length;
+    const criticalCount = vulnerabilities.filter((vulnerability) => vulnerability.severity === 'critical').length;
+    const highCount = vulnerabilities.filter((vulnerability) => vulnerability.severity === 'high').length;
 
     if (criticalCount > 0) return 'critical';
     if (highCount > 2) return 'high';
@@ -322,9 +361,10 @@ export class SecurityScanner {
 
   static async isCommandAvailable(command) {
     try {
-      await execAsync(`which ${command}`);
+      const lookupCommand = process.platform === 'win32' ? 'where' : 'which'; // FIX: make command detection portable while avoiding shell interpolation
+      await execFileAsync(lookupCommand, [command]);
       return true;
-    } catch (error) {
+    } catch {
       return false;
     }
   }

@@ -9,7 +9,6 @@ on:
 env:
   NODE_VERSION: '18'
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   security-analysis:
@@ -33,8 +32,8 @@ jobs:
           severity: 'CRITICAL,HIGH,MEDIUM'
 
       - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('trivy-results.sarif') != ''
         with:
           sarif_file: 'trivy-results.sarif'
 
@@ -159,6 +158,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [lint-and-test-frontend, lint-and-test-backend]
     if: github.event_name == 'push'
+    permissions:
+      contents: read
+      security-events: write
 
     steps:
       - name: Checkout code
@@ -167,13 +169,24 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Prepare Docker image tags
+        id: image-tags
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          IMAGE_NAME="${REPOSITORY,,}"
+          echo "frontend=${{ env.REGISTRY }}/${IMAGE_NAME}-frontend:${SHA}" >> "$GITHUB_OUTPUT"
+          echo "backend=${{ env.REGISTRY }}/${IMAGE_NAME}-backend:${SHA}" >> "$GITHUB_OUTPUT"
+
       - name: Build frontend Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           push: false
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:${{ github.sha }}
+          tags: ${{ steps.image-tags.outputs.frontend }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           load: true
@@ -184,7 +197,7 @@ jobs:
           context: ./backend
           file: ./backend/Dockerfile
           push: false
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:${{ github.sha }}
+          tags: ${{ steps.image-tags.outputs.backend }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           load: true
@@ -192,7 +205,7 @@ jobs:
       - name: Scan frontend image with Trivy
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:${{ github.sha }}
+          image-ref: ${{ steps.image-tags.outputs.frontend }}
           format: 'sarif'
           output: 'trivy-frontend-image.sarif'
           severity: 'CRITICAL,HIGH'
@@ -200,18 +213,22 @@ jobs:
       - name: Scan backend image with Trivy
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:${{ github.sha }}
+          image-ref: ${{ steps.image-tags.outputs.backend }}
           format: 'sarif'
           output: 'trivy-backend-image.sarif'
           severity: 'CRITICAL,HIGH'
 
-      - name: Upload container scan results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
+      - name: Upload frontend container scan results
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('trivy-frontend-image.sarif') != ''
         with:
-          sarif_file: |
-            trivy-frontend-image.sarif
-            trivy-backend-image.sarif
+          sarif_file: 'trivy-frontend-image.sarif'
+
+      - name: Upload backend container scan results
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('trivy-backend-image.sarif') != ''
+        with:
+          sarif_file: 'trivy-backend-image.sarif'
 
   security-summary:
     name: Security Summary

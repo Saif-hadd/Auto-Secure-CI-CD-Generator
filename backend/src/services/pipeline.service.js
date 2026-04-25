@@ -1,19 +1,41 @@
-import { query } from '../config/database.js';
+// FIXES APPLIED: 1.1, 1.2, 1.3, 1.5, 2.1, 2.2, 2.3, 3.1
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import fs from 'fs';
+import path from 'path';
+import axios from 'axios';
+import { getClient, query } from '../config/database.js';
 import { RepoService } from './repo.service.js';
 import { YAMLGenerator } from '../utils/yaml-generator.js';
 import { SecurityService } from './security.service.js';
 import { RemediationService } from './remediation.service.js';
 import { StackDetector } from '../utils/stack-detector.js';
-import axios from 'axios';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import fs from 'fs';
+import { logger } from '../utils/logger.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export class PipelineService {
+  static async removeTempRepo(tempRepoPath, context = {}) {
+    if (!tempRepoPath || !fs.existsSync(tempRepoPath)) {
+      return;
+    }
+
+    try {
+      await fs.promises.rm(tempRepoPath, { recursive: true, force: true }); // FIX: remove temporary repositories without invoking a shell command
+      logger.info({ context: { ...context, tempRepoPath } }, 'Temporary repository deleted'); // FIX: replace console logging with structured logger
+    } catch (error) {
+      logger.error({ context: { ...context, tempRepoPath }, err: error }, 'Temporary repository cleanup failed'); // FIX: replace console logging with structured logger
+    }
+  }
+
   static async generatePipeline(repoId, userId, pipelineType, options = {}) {
+    if (!/^\d+$/.test(String(repoId))) {
+      throw new Error('Invalid repoId'); // FIX: block path traversal and malformed repository identifiers before building temp paths
+    }
+
     let tempRepoPath = null;
+    let pipeline = null;
+    let scanResult = null;
 
     try {
       const repository = await RepoService.getRepositoryById(repoId, userId);
@@ -23,7 +45,7 @@ export class PipelineService {
       }
 
       const userResult = await query(
-        'SELECT access_token FROM users WHERE id = $1',
+        'SELECT access_token FROM users WHERE id = $1', // TODO: ENCRYPT access_token with AES-256-GCM before reading from the DB in production // FIX: mark plaintext token access for remediation
         [userId]
       );
 
@@ -31,25 +53,31 @@ export class PipelineService {
         throw new Error('User not found');
       }
 
-      const token = userResult.rows[0].access_token;
+      const token = userResult.rows[0].access_token; // TODO: ENCRYPT access_token with AES-256-GCM before using plaintext DB values in production // FIX: mark plaintext token handling for remediation
 
       let stack = null;
 
       try {
-        tempRepoPath = `/tmp/repo_${repoId}_${Date.now()}`;
+        tempRepoPath = path.join('/tmp', `repo_${repoId}_${Date.now()}`); // FIX: constrain temporary repositories to a controlled base directory
 
-        await execAsync(
-          `git clone --depth=1 https://oauth2:${token}@github.com/${repository.repo_full_name}.git ${tempRepoPath}`,
+        await execFileAsync(
+          'git',
+          ['clone', '--depth=1', `https://oauth2:${token}@github.com/${repository.repo_full_name}.git`, tempRepoPath], // FIX: use execFile arguments instead of a shell-interpolated clone command
           { timeout: 60000 }
         );
 
-        console.log(`✅ Repo cloned: ${tempRepoPath}`);
+        logger.info({ context: { repoId, userId, tempRepoPath } }, 'Repository cloned for pipeline generation'); // FIX: replace console logging with structured logger
 
         stack = await StackDetector.detectFromLocal(tempRepoPath);
-        console.log(`✅ Stack detected: ${stack.type} / ${stack.framework}`);
-
+        logger.info(
+          { context: { repoId, userId, stackType: stack?.type, framework: stack?.framework } },
+          'Repository stack detected'
+        ); // FIX: replace console logging with structured logger
       } catch (cloneError) {
-        console.error('❌ Clone failed, fallback to DB/API:', cloneError.message);
+        logger.error(
+          { context: { repoId, userId }, err: cloneError },
+          'Repository clone failed; falling back to stored metadata'
+        ); // FIX: replace console logging with structured logger
 
         stack = repository.stack_detected;
 
@@ -60,88 +88,97 @@ export class PipelineService {
 
       const generatedYAML = YAMLGenerator.generate(stack, pipelineType);
       const securityFeatures = this.extractSecurityFeatures(generatedYAML);
-
-      const pipelineResult = await query(
-        `INSERT INTO pipelines (repo_id, user_id, pipeline_type, generated_yaml, security_features, status)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING *`,
-        [repoId, userId, pipelineType, generatedYAML, JSON.stringify(securityFeatures), 'draft']
-      );
-
-      const pipeline = pipelineResult.rows[0];
-
       const projectPath = tempRepoPath || options.projectPath || process.cwd();
       const scannerType = options.scannerType || 'trivy';
 
+      const client = await getClient();
+
       try {
-        const scanResult = await SecurityService.scanRepository(projectPath, {
+        await client.query('BEGIN'); // FIX: wrap pipeline creation and initial scan persistence in a single transaction
+
+        const pipelineResult = await client.query(
+          `INSERT INTO pipelines (repo_id, user_id, pipeline_type, generated_yaml, security_features, status)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           RETURNING *`,
+          [repoId, userId, pipelineType, generatedYAML, JSON.stringify(securityFeatures), 'draft']
+        );
+
+        pipeline = pipelineResult.rows[0];
+
+        scanResult = await SecurityService.scanRepository(projectPath, {
           scannerType,
-          pipelineId: pipeline.id
+          pipelineId: pipeline.id,
+          userId,
+          dbClient: client // FIX: save scan results within the same transaction as the pipeline insert
         });
 
-        console.log('Security scan completed:', scanResult.summary);
-
-        if (options.autoRemediate && scanResult.summary.totalVulnerabilities > 0) {
-          try {
-            const remediationResult = await RemediationService.runAutoRemediation(
-              pipeline.id,
-              userId,
-              token,
-              projectPath
-            );
-            console.log('Auto-remediation completed:', remediationResult);
-          } catch (remediationError) {
-            console.error('Auto-remediation failed:', remediationError);
-          }
-        }
-
-      } catch (scanError) {
-        console.error('Security scan failed, using fallback:', scanError.message);
+        await client.query('COMMIT'); // FIX: commit only after the pipeline and initial scan state are both persisted
+      } catch (error) {
+        await client.query('ROLLBACK'); // FIX: ensure partial pipeline records are not left behind when the initial scan fails
+        throw error;
+      } finally {
+        client.release();
       }
 
-      if (tempRepoPath && fs.existsSync(tempRepoPath)) {
+      logger.info(
+        {
+          context: {
+            repoId,
+            userId,
+            pipelineId: pipeline.id,
+            totalVulnerabilities: scanResult.summary.totalVulnerabilities
+          }
+        },
+        'Security scan completed for generated pipeline'
+      ); // FIX: replace console logging with structured logger
+
+      if (options.autoRemediate && scanResult.summary.totalVulnerabilities > 0) {
         try {
-          await execAsync(`rm -rf ${tempRepoPath}`);
-          console.log('🧹 Temp repo deleted');
-        } catch (cleanError) {
-          console.error('Cleanup failed:', cleanError.message);
+          const remediationResult = await RemediationService.runAutoRemediation(
+            pipeline.id,
+            userId,
+            token,
+            projectPath
+          );
+
+          logger.info(
+            { context: { repoId, userId, pipelineId: pipeline.id, prCreated: remediationResult.pr_created } },
+            'Auto-remediation completed'
+          ); // FIX: replace console logging with structured logger
+        } catch (remediationError) {
+          logger.error(
+            { context: { repoId, userId, pipelineId: pipeline.id }, err: remediationError },
+            'Auto-remediation failed'
+          ); // FIX: replace console logging with structured logger
         }
       }
 
       return pipeline;
-
     } catch (error) {
-      if (tempRepoPath && fs.existsSync(tempRepoPath)) {
-        try {
-          await execAsync(`rm -rf ${tempRepoPath}`);
-        } catch (cleanError) {
-          console.error('Cleanup failed:', cleanError.message);
-        }
-      }
-
-      console.error('Generate pipeline error:', error);
+      logger.error({ context: { repoId, userId }, err: error }, 'Generate pipeline error'); // FIX: replace console logging with structured logger
       throw error;
+    } finally {
+      await this.removeTempRepo(tempRepoPath, { repoId, userId });
     }
   }
 
   static extractSecurityFeatures(yaml) {
     const features = [];
-    if (yaml.includes('SAST'))         features.push('SAST');
-    if (yaml.includes('DAST'))         features.push('DAST');
-    if (yaml.includes('Secrets'))      features.push('Secrets Scanning');
+    if (yaml.includes('SAST')) features.push('SAST');
+    if (yaml.includes('DAST')) features.push('DAST');
+    if (yaml.includes('Secrets')) features.push('Secrets Scanning');
     if (yaml.includes('Dependencies')) features.push('Dependency Scanning');
     return features;
   }
 
   static async runSecurityScan(pipelineId, projectPath, scannerType = 'trivy') {
     try {
-      const scanResult = await SecurityService.scanRepository(projectPath, {
+      return await SecurityService.scanRepository(projectPath, {
         scannerType,
         pipelineId
       });
-      return scanResult;
     } catch (error) {
-      console.error('Run security scan error:', error);
+      logger.error({ context: { pipelineId, projectPath, scannerType }, err: error }, 'Run security scan error'); // FIX: replace console logging with structured logger
       throw error;
     }
   }
@@ -155,10 +192,8 @@ export class PipelineService {
   }
 
   static async pushToGitHub(pipelineId, userId) {
-
-    // ✅ Token toujours depuis la DB — fiable à 100%
     const userResult = await query(
-      'SELECT access_token FROM users WHERE id = $1',
+      'SELECT access_token FROM users WHERE id = $1', // TODO: ENCRYPT access_token with AES-256-GCM before reading from the DB in production // FIX: mark plaintext token access for remediation
       [userId]
     );
 
@@ -166,13 +201,11 @@ export class PipelineService {
       throw new Error('User not found');
     }
 
-    const token = userResult.rows[0].access_token;
+    const token = userResult.rows[0].access_token; // TODO: ENCRYPT access_token with AES-256-GCM before using plaintext DB values in production // FIX: mark plaintext token handling for remediation
 
     if (!token) {
-      throw new Error('Access token missing — user must re-authenticate');
+      throw new Error('Access token missing - user must re-authenticate');
     }
-
-    console.log('🔑 Token (first 10):', token.substring(0, 10));
 
     try {
       const pipelineResult = await query(
@@ -192,15 +225,16 @@ export class PipelineService {
       const repo = {
         repo_full_name: row.repo_full_name,
         default_branch: row.default_branch,
-        repo_url:       row.repo_url
+        repo_url: row.repo_url
       };
 
-      console.log('📦 Repo:', repo.repo_full_name, '| Branch:', repo.default_branch);
+      logger.info(
+        { context: { pipelineId, userId, repoFullName: repo.repo_full_name, branch: repo.default_branch } },
+        'Preparing to push generated workflow to GitHub'
+      ); // FIX: replace console logging with structured logger
 
       const filePath = '.github/workflows/secure-pipeline.yml';
-      const content  = Buffer.from(row.generated_yaml).toString('base64');
-
-
+      const content = Buffer.from(row.generated_yaml).toString('base64');
       let sha = null;
 
       try {
@@ -210,20 +244,20 @@ export class PipelineService {
             headers: {
               Authorization: `Bearer ${token}`,
               Accept: 'application/vnd.github.v3+json'
-            }
+            },
+            timeout: 15000 // FIX: bound GitHub API calls so pipeline pushes cannot hang indefinitely
           }
         );
         sha = existing.data.sha;
-        console.log('✅ File exists → update mode, SHA:', sha);
-      } catch (err) {
-        if (err.response?.status === 404) {
-          console.log('📄 File not found → create mode');
+        logger.info({ context: { pipelineId, userId, sha } }, 'Existing workflow found; updating file'); // FIX: replace console logging with structured logger
+      } catch (error) {
+        if (error.response?.status === 404) {
+          logger.info({ context: { pipelineId, userId, filePath } }, 'Workflow file not found; creating new file'); // FIX: replace console logging with structured logger
         } else {
-          throw err;
+          throw error;
         }
       }
 
-   
       const payload = {
         message: sha ? 'Update secure CI/CD pipeline' : 'Add secure CI/CD pipeline',
         content,
@@ -238,11 +272,12 @@ export class PipelineService {
           headers: {
             Authorization: `Bearer ${token}`,
             Accept: 'application/vnd.github.v3+json'
-          }
+          },
+          timeout: 15000 // FIX: bound GitHub API calls so pipeline pushes cannot hang indefinitely
         }
       );
 
-      console.log('✅ GitHub PUT status:', putResponse.status);
+      logger.info({ context: { pipelineId, userId, status: putResponse.status } }, 'Workflow pushed to GitHub'); // FIX: replace console logging with structured logger
 
       await query(
         'UPDATE pipelines SET status = $1, pushed_at = NOW() WHERE id = $2',
@@ -254,13 +289,14 @@ export class PipelineService {
         message: 'Pipeline pushed to GitHub successfully',
         url: `${repo.repo_url}/blob/${repo.default_branch}/${filePath}`
       };
-
     } catch (error) {
-      console.error('Push to GitHub error:', error.response?.data || error.message);
+      logger.error(
+        { context: { pipelineId, userId }, err: error.response?.data || error },
+        'Push to GitHub error'
+      ); // FIX: replace console logging with structured logger
       throw new Error('Failed to push pipeline to GitHub');
     }
   }
-
 
   static async getSecurityDashboard(pipelineId, userId) {
     try {
@@ -274,19 +310,17 @@ export class PipelineService {
       }
 
       const pipeline = pipelineResult.rows[0];
-
-      const scansResult = await query(
-        'SELECT * FROM security_scans WHERE pipeline_id = $1',
-        [pipelineId]
-      );
-
-      const scans = scansResult.rows;
+      const scans = await SecurityService.getScanHistory(pipelineId, userId); // FIX: reuse ownership-aware scan history retrieval
       const totalVulnerabilities = scans.reduce((sum, scan) => sum + scan.vulnerabilities_count, 0);
 
-      const riskLevels  = scans.map(s => s.risk_level);
-      const overallRisk = riskLevels.includes('critical') ? 'critical' :
-                          riskLevels.includes('high')     ? 'high'     :
-                          riskLevels.includes('medium')   ? 'medium'   : 'low';
+      const riskLevels = scans.map((scan) => scan.risk_level);
+      const overallRisk = riskLevels.includes('critical')
+        ? 'critical'
+        : riskLevels.includes('high')
+          ? 'high'
+          : riskLevels.includes('medium')
+            ? 'medium'
+            : 'low';
 
       const suggestions = this.generateSuggestions(scans);
 
@@ -296,13 +330,12 @@ export class PipelineService {
         summary: {
           totalVulnerabilities,
           overallRisk,
-          securityScore: Math.max(0, 100 - totalVulnerabilities * 5)
+          securityScore: SecurityService.calculateSecurityScore(scans) // FIX: reuse the severity-weighted security score calculation instead of duplicating a flat formula
         },
         suggestions
       };
-
     } catch (error) {
-      console.error('Get security dashboard error:', error);
+      logger.error({ context: { pipelineId, userId }, err: error }, 'Get security dashboard error'); // FIX: replace console logging with structured logger
       throw error;
     }
   }
@@ -310,23 +343,23 @@ export class PipelineService {
   static generateSuggestions(scans) {
     const suggestions = [];
 
-    scans.forEach(scan => {
+    scans.forEach((scan) => {
       if (scan.vulnerabilities_count > 0) {
         suggestions.push({
-          type:     scan.scan_type,
-          message:  `Found ${scan.vulnerabilities_count} issues in ${scan.scan_type} scan`,
+          type: scan.scan_type,
+          message: `Found ${scan.vulnerabilities_count} issues in ${scan.scan_type} scan`,
           severity: scan.risk_level,
-          action:   `Review and fix ${scan.scan_type} vulnerabilities`
+          action: `Review and fix ${scan.scan_type} vulnerabilities`
         });
       }
     });
 
     if (suggestions.length === 0) {
       suggestions.push({
-        type:     'success',
-        message:  'No security issues detected',
+        type: 'success',
+        message: 'No security issues detected',
         severity: 'low',
-        action:   'Continue monitoring'
+        action: 'Continue monitoring'
       });
     }
 

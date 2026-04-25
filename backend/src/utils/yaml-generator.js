@@ -1,18 +1,40 @@
+// FIXES APPLIED: 1.7, 3.1, 3.3
+import { logger } from './logger.js';
+
 export class YAMLGenerator {
+  static safe(value) {
+    return String(value ?? '').replace(/[:#|>{}\[\]]/g, ''); // FIX: sanitize stack values before interpolating them into YAML templates
+  }
+
+  static sanitizeStack(stack = {}) {
+    return {
+      ...stack,
+      type: this.safe(stack.type),
+      framework: this.safe(stack.framework),
+      language: this.safe(stack.language),
+      packageManager: this.safe(stack.packageManager),
+      buildTool: this.safe(stack.buildTool)
+    };
+  }
+
   static generate(stack, pipelineType = 'secure') {
-    if (!stack || stack.type === 'unknown') {
-      console.warn(`[YAMLGenerator] Stack type is unknown - generated YAML will contain placeholder commands. Stack: ${JSON.stringify(stack)}`);
+    const safeStack = this.sanitizeStack(stack); // FIX: pass only sanitized stack metadata into YAML template generation
+
+    if (!safeStack || safeStack.type === 'unknown') {
+      logger.warn({ context: { pipelineType, stack: safeStack } }, '[YAMLGenerator] Stack type is unknown - generated YAML will contain placeholder commands.'); // FIX: replace console logging with structured logger
     }
 
     const templates = {
-      basic: this.generateBasic(stack),
-      advanced: this.generateAdvanced(stack),
-      secure: this.generateSecure(stack)
+      basic: this.generateBasic(safeStack),
+      advanced: this.generateAdvanced(safeStack),
+      secure: this.generateSecure(safeStack)
     };
     return templates[pipelineType] || templates.secure;
   }
 
   static generateBasic(stack) {
+    const safeStack = this.sanitizeStack(stack); // FIX: ensure every template literal only receives sanitized stack metadata
+
     return `name: Basic CI Pipeline
 
 on:
@@ -29,13 +51,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-${this.generateInstallSteps(stack)}
-${this.generateTestSteps(stack)}
-${this.generateBuildSteps(stack)}
+${this.generateInstallSteps(safeStack)}
+${this.generateTestSteps(safeStack)}
+${this.generateBuildSteps(safeStack)}
 `;
   }
 
   static generateAdvanced(stack) {
+    const safeStack = this.sanitizeStack(stack); // FIX: ensure every template literal only receives sanitized stack metadata
+
     return `name: Advanced CI/CD Pipeline
 
 on:
@@ -52,19 +76,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-${this.generateInstallSteps(stack)}
+${this.generateInstallSteps(safeStack)}
 
       - name: Lint code
-        run: ${this.getLintCommand(stack)}
+        run: ${this.getLintCommand(safeStack)}
         continue-on-error: true
 
-${this.generateTestSteps(stack)}
-${this.generateBuildSteps(stack)}
-${this.generateDockerSteps(stack)}
+${this.generateTestSteps(safeStack)}
+${this.generateBuildSteps(safeStack)}
+${this.generateDockerSteps(safeStack)}
 `;
   }
 
   static generateSecure(stack) {
+    const safeStack = this.sanitizeStack(stack); // FIX: ensure every template literal only receives sanitized stack metadata
+
     return `name: Secure CI/CD Pipeline with DevSecOps
 
 on:
@@ -95,7 +121,7 @@ jobs:
         continue-on-error: true
 
       - name: Secrets scanning - Trivy
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.20.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -112,7 +138,7 @@ jobs:
         continue-on-error: true
 
       - name: Dependency vulnerability scan - Trivy
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.20.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -129,7 +155,7 @@ jobs:
           sarif_file: 'trivy-vuln.sarif'
         continue-on-error: true
 
-${this.getDependencyAuditSteps(stack)}
+${this.getDependencyAuditSteps(safeStack)}
 
   build-and-test:
     runs-on: ubuntu-latest
@@ -139,19 +165,19 @@ ${this.getDependencyAuditSteps(stack)}
       - name: Checkout code
         uses: actions/checkout@v4
 
-${this.generateInstallSteps(stack)}
+${this.generateInstallSteps(safeStack)}
 
       - name: Run tests
-        run: ${this.getTestCommand(stack)}
+        run: ${this.getTestCommand(safeStack)}
         continue-on-error: true
 
       - name: Generate test coverage
-        run: ${this.getCoverageCommand(stack)}
+        run: ${this.getCoverageCommand(safeStack)}
         continue-on-error: true
 
-${this.generateBuildSteps(stack)}
+${this.generateBuildSteps(safeStack)}
 
-${this.generateDockerBuildAndScanSteps(stack)}
+${this.generateDockerBuildAndScanSteps(safeStack)}
 
   deploy:
     runs-on: ubuntu-latest
@@ -166,16 +192,18 @@ ${this.generateDockerBuildAndScanSteps(stack)}
 
       - name: Deploy to production
         run: |
-          echo "🚀 Deploying to production..."
+          echo "Deploying to production..."
 
       - name: Security verification post-deploy
         run: |
-          echo "✅ Verifying SSL/TLS and security headers..."
+          echo "Verifying SSL/TLS and security headers..."
 `;
   }
 
   static getDependencyAuditSteps(stack) {
-    switch (stack.type) {
+    const safeStack = this.sanitizeStack(stack); // FIX: ensure fallback YAML uses sanitized stack metadata
+
+    switch (safeStack.type) {
       case 'node':
         return `      - name: npm audit
         run: |
@@ -201,7 +229,7 @@ ${this.generateDockerBuildAndScanSteps(stack)}
 
       default:
         return `      - name: Dependency audit
-        run: echo "Configure dependency audit for your stack"`;
+        run: echo "Configure dependency audit for ${safeStack.packageManager || safeStack.type || 'this stack'}"`;
     }
   }
 
@@ -219,7 +247,7 @@ ${this.generateDockerBuildAndScanSteps(stack)}
         continue-on-error: true
 
       - name: Scan Docker image - Trivy
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.20.0
         with:
           image-ref: app:\${{ github.sha }}
           format: 'sarif'
@@ -236,7 +264,9 @@ ${this.generateDockerBuildAndScanSteps(stack)}
   }
 
   static generateInstallSteps(stack) {
-    switch (stack.type) {
+    const safeStack = this.sanitizeStack(stack); // FIX: ensure every template literal only receives sanitized stack metadata
+
+    switch (safeStack.type) {
       case 'node':
         return `      - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -277,14 +307,33 @@ ${this.generateDockerBuildAndScanSteps(stack)}
       - name: Install dependencies
         run: go mod download`;
 
+      case 'rust':
+        return `      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Fetch Rust dependencies
+        run: cargo fetch`;
+
+      case 'php':
+        return `      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          tools: composer
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist`;
+
       default:
         return `      - name: Install dependencies
-        run: echo "Configure install steps for your stack"`;
+        run: echo "Configure install steps for ${safeStack.language || safeStack.type || 'this stack'}"`;
     }
   }
 
   static generateBuildSteps(stack) {
-    switch (stack.type) {
+    const safeStack = this.sanitizeStack(stack); // FIX: ensure every template literal only receives sanitized stack metadata
+
+    switch (safeStack.type) {
       case 'node':
         return `      - name: Build application
         run: npm run build`;
@@ -294,19 +343,24 @@ ${this.generateDockerBuildAndScanSteps(stack)}
       case 'go':
         return `      - name: Build application
         run: go build -v ./...`;
+      case 'rust':
+        return `      - name: Build application
+        run: cargo build --release`;
       default:
         return `      - name: Build application
-        run: echo "Configure build steps"`;
+        run: echo "Configure build steps for ${safeStack.framework || safeStack.type || 'this stack'}"`;
     }
   }
 
   static generateTestSteps(stack) {
+    const safeStack = this.sanitizeStack(stack); // FIX: ensure every template literal only receives sanitized stack metadata
+
     return `      - name: Run tests
-        run: ${this.getTestCommand(stack)}
+        run: ${this.getTestCommand(safeStack)}
         continue-on-error: true`;
   }
 
-  static generateDockerSteps(stack) {
+  static generateDockerSteps() {
     return `      - name: Build Docker image
         uses: docker/build-push-action@v5
         with:
@@ -316,29 +370,37 @@ ${this.generateDockerBuildAndScanSteps(stack)}
   }
 
   static getTestCommand(stack) {
-    switch (stack.type) {
+    const safeStack = this.sanitizeStack(stack); // FIX: ensure fallback YAML uses sanitized stack metadata
+
+    switch (safeStack.type) {
       case 'node': return 'npm test || echo "No tests configured"';
       case 'python': return 'pytest || echo "No tests configured"';
-      case 'java': return stack.buildTool === 'Gradle' ? './gradlew test' : 'mvn test';
+      case 'java': return safeStack.buildTool === 'Gradle' ? './gradlew test' : 'mvn test';
       case 'go': return 'go test ./...';
-      default: return 'echo "Configure test command"';
+      case 'rust': return 'cargo test';
+      case 'php': return './vendor/bin/phpunit';
+      default: return `echo "Configure test command for ${safeStack.language || safeStack.type || 'this stack'}"`;
     }
   }
 
   static getLintCommand(stack) {
-    switch (stack.type) {
+    const safeStack = this.sanitizeStack(stack); // FIX: ensure fallback YAML uses sanitized stack metadata
+
+    switch (safeStack.type) {
       case 'node': return 'npm run lint || echo "No lint configured"';
       case 'python': return 'pylint **/*.py || echo "Pylint not configured"';
-      default: return 'echo "Configure lint command"';
+      default: return `echo "Configure lint command for ${safeStack.language || safeStack.type || 'this stack'}"`;
     }
   }
 
   static getCoverageCommand(stack) {
-    switch (stack.type) {
+    const safeStack = this.sanitizeStack(stack); // FIX: ensure fallback YAML uses sanitized stack metadata
+
+    switch (safeStack.type) {
       case 'node': return 'npm run test:coverage || echo "Coverage not configured"';
       case 'python': return 'pytest --cov || echo "Coverage not configured"';
       case 'java': return 'mvn jacoco:report || echo "Jacoco not configured"';
-      default: return 'echo "Configure coverage command"';
+      default: return `echo "Configure coverage command for ${safeStack.language || safeStack.type || 'this stack'}"`;
     }
   }
 }
