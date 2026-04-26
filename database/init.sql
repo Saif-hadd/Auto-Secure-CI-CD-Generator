@@ -64,6 +64,19 @@ CREATE TABLE IF NOT EXISTS remediations (
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  session_token_hash TEXT NOT NULL UNIQUE,
+  csrf_token_hash TEXT NOT NULL,
+  expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  user_agent TEXT,
+  ip_address TEXT,
+  last_used_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_users_github_id ON users(github_id);
 CREATE INDEX IF NOT EXISTS idx_repositories_user_id ON repositories(user_id);
@@ -74,6 +87,8 @@ CREATE INDEX IF NOT EXISTS idx_security_scans_pipeline_id ON security_scans(pipe
 CREATE INDEX IF NOT EXISTS idx_remediations_pipeline_id ON remediations(pipeline_id);
 CREATE INDEX IF NOT EXISTS idx_remediations_created_at ON remediations(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_remediations_status ON remediations(status);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
 
 -- Create updated_at trigger function
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -95,4 +110,7 @@ CREATE TRIGGER update_pipelines_updated_at BEFORE UPDATE ON pipelines
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TRIGGER update_remediations_updated_at BEFORE UPDATE ON remediations
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_sessions_updated_at BEFORE UPDATE ON sessions
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

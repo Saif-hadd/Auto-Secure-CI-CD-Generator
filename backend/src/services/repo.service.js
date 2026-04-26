@@ -1,6 +1,8 @@
 import axios from 'axios';
 import { query } from '../config/database.js';
+import { AuthService } from './auth.service.js';
 import { StackDetector } from '../utils/stack-detector.js';
+import { logger } from '../utils/logger.js';
 
 export class RepoService {
   static async getUserRepositories(userId) {
@@ -19,14 +21,16 @@ export class RepoService {
     return result.rows.length > 0 ? result.rows[0] : null;
   }
 
-  static async syncUserRepositories(userId, accessToken) {
+  static async syncUserRepositories(userId) {
     try {
+      const accessToken = await AuthService.getGitHubAccessTokenForUser(userId);
       const response = await axios.get('https://api.github.com/user/repos', {
         headers: { Authorization: `Bearer ${accessToken}` },
         params: {
           sort: 'updated',
           per_page: 100
-        }
+        },
+        timeout: 15000
       });
 
       const githubRepos = response.data;
@@ -69,12 +73,12 @@ export class RepoService {
 
       return repositories;
     } catch (error) {
-      console.error('Sync repositories error:', error);
+      logger.error({ context: { userId }, err: error }, 'Sync repositories error');
       throw new Error('Failed to sync repositories');
     }
   }
 
-  static async detectTechStack(repoId, userId, accessToken) {
+  static async detectTechStack(repoId, userId, accessToken = null) {
     try {
       const repository = await this.getRepositoryById(repoId, userId);
 
@@ -82,10 +86,12 @@ export class RepoService {
         throw new Error('Repository not found');
       }
 
+      const token = accessToken || await AuthService.getGitHubAccessTokenForUser(userId);
+
       const stack = await StackDetector.detect(
         repository.repo_full_name,
         repository.default_branch,
-        accessToken
+        token
       );
 
       await query(
@@ -95,7 +101,7 @@ export class RepoService {
 
       return stack;
     } catch (error) {
-      console.error('Detect stack error:', error);
+      logger.error({ context: { repoId, userId }, err: error }, 'Detect stack error');
       throw new Error('Failed to detect tech stack');
     }
   }

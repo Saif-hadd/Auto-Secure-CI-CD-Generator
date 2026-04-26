@@ -1,9 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Github, Shield, Lock, Terminal, Cpu, Eye, Fingerprint } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-
-const GITHUB_CLIENT_ID = import.meta.env.VITE_GITHUB_CLIENT_ID;
-const REDIRECT_URI = import.meta.env.VITE_GITHUB_REDIRECT_URI || window.location.origin;
+import { ApiClient } from '../lib/api';
 
 function FloatingOrb({ className, delay = 0 }: { className: string; delay?: number }) {
   return (
@@ -56,21 +54,27 @@ export function LoginPage() {
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const code = urlParams.get('code');
+    const state = urlParams.get('state');
 
-    if (code) {
+    if (code && state) {
       setLoading(true);
-      login(code)
-        .catch(error => {
-          console.error('Login error:', error);
+      login(code, state)
+        .catch(() => {
           window.history.replaceState({}, document.title, '/');
         })
         .finally(() => setLoading(false));
     }
   }, [login]);
 
-  const handleGitHubLogin = () => {
-    const githubAuthUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${REDIRECT_URI}&scope=repo,user,workflow`;
-    window.location.href = githubAuthUrl;
+  const handleGitHubLogin = async () => {
+    setLoading(true);
+
+    try {
+      const { url } = await ApiClient.getGitHubAuthUrl();
+      window.location.href = url;
+    } catch {
+      setLoading(false);
+    }
   };
 
   const features = [

@@ -1,11 +1,12 @@
 import { RepoService } from '../services/repo.service.js';
+import { logger } from '../utils/logger.js';
 
 export const getUserRepositories = async (req, res) => {
   try {
     const repositories = await RepoService.getUserRepositories(req.user.id);
     res.json({ repositories });
   } catch (error) {
-    console.error('Get repositories error:', error);
+    logger.error({ context: { userId: req.user?.id }, err: error }, 'Get repositories error');
     res.status(500).json({ error: error.message });
   }
 };
@@ -21,20 +22,17 @@ export const getRepositoryById = async (req, res) => {
 
     res.json({ repository });
   } catch (error) {
-    console.error('Get repository error:', error);
+    logger.error({ context: { repoId: req.params.repoId, userId: req.user?.id }, err: error }, 'Get repository error');
     res.status(500).json({ error: error.message });
   }
 };
 
 export const syncRepositories = async (req, res) => {
   try {
-    const repositories = await RepoService.syncUserRepositories(
-      req.user.id,
-      req.user.access_token
-    );
+    const repositories = await RepoService.syncUserRepositories(req.user.id);
     res.json({ repositories });
   } catch (error) {
-    console.error('Sync repositories error:', error);
+    logger.error({ context: { userId: req.user?.id }, err: error }, 'Sync repositories error');
     res.status(500).json({ error: error.message });
   }
 };
@@ -42,14 +40,10 @@ export const syncRepositories = async (req, res) => {
 export const detectStack = async (req, res) => {
   try {
     const { repoId } = req.params;
-    const stack = await RepoService.detectTechStack(
-      repoId,
-      req.user.id,
-      req.user.access_token
-    );
+    const stack = await RepoService.detectTechStack(repoId, req.user.id);
     res.json({ stack });
   } catch (error) {
-    console.error('Detect stack error:', error);
+    logger.error({ context: { repoId: req.params.repoId, userId: req.user?.id }, err: error }, 'Detect stack error');
     res.status(500).json({ error: error.message });
   }
 };

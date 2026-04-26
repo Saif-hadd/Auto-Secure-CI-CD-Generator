@@ -90,11 +90,14 @@ cp .env.example .env
 Edit `.env` and add:
 
 ```env
-VITE_SUPABASE_URL=<your-supabase-url>
-VITE_SUPABASE_ANON_KEY=<your-supabase-anon-key>
 VITE_API_URL=http://localhost:3001
 VITE_GITHUB_CLIENT_ID=<your-github-client-id>
-VITE_GITHUB_REDIRECT_URI=http://localhost:5173
+VITE_GITHUB_REDIRECT_URI=http://localhost
+FRONTEND_URL=http://localhost
+DB_NAME=cicd_generator
+DB_USER=postgres
+DB_PASSWORD=<your-postgres-password>
+TOKEN_ENCRYPTION_KEY=<random-32-plus-character-secret>
 ```
 
 #### Backend (backend/.env)
@@ -108,11 +111,11 @@ Edit `backend/.env` and add:
 
 ```env
 PORT=3001
-FRONTEND_URL=http://localhost:5173
-SUPABASE_URL=<your-supabase-url>
-SUPABASE_SERVICE_ROLE_KEY=<your-supabase-service-role-key>
+FRONTEND_URL=http://localhost
+DATABASE_URL=postgresql://postgres:<your-postgres-password>@localhost:5432/cicd_generator
 GITHUB_CLIENT_ID=<your-github-client-id>
 GITHUB_CLIENT_SECRET=<your-github-client-secret>
+TOKEN_ENCRYPTION_KEY=<random-32-plus-character-secret>
 ```
 
 ### 5. Install Dependencies

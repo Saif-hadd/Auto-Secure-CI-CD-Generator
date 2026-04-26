@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 import { getClient, query } from '../config/database.js';
+import { AuthService } from './auth.service.js';
 import { RepoService } from './repo.service.js';
 import { YAMLGenerator } from '../utils/yaml-generator.js';
 import { SecurityService } from './security.service.js';
@@ -48,16 +49,7 @@ export class PipelineService {
       // TODO: ENCRYPT — access_token must be encrypted with AES-256-GCM // FIX: token encryption placeholder for plaintext DB reads
       // before production. Use a KMS key or a TOKEN_ENCRYPTION_KEY env var. // FIX: token encryption placeholder for plaintext DB reads
       // Decrypt here before use, encrypt before INSERT/UPDATE. // FIX: token encryption placeholder for plaintext DB reads
-      const userResult = await query( // FIX: access_token is still being read from the database in plaintext
-        'SELECT access_token FROM users WHERE id = $1',
-        [userId]
-      );
-
-      if (userResult.rows.length === 0) {
-        throw new Error('User not found');
-      }
-
-      const token = userResult.rows[0].access_token; // TODO: ENCRYPT access_token with AES-256-GCM before using plaintext DB values in production // FIX: mark plaintext token handling for remediation
+      const token = await AuthService.getGitHubAccessTokenForUser(userId);
 
       let stack = null;
 
@@ -153,7 +145,6 @@ export class PipelineService {
           const remediationResult = await RemediationService.runAutoRemediation(
             pipeline.id,
             userId,
-            token,
             projectPath
           );
 
@@ -211,16 +202,7 @@ export class PipelineService {
     // TODO: ENCRYPT — access_token must be encrypted with AES-256-GCM // FIX: token encryption placeholder for plaintext DB reads
     // before production. Use a KMS key or a TOKEN_ENCRYPTION_KEY env var. // FIX: token encryption placeholder for plaintext DB reads
     // Decrypt here before use, encrypt before INSERT/UPDATE. // FIX: token encryption placeholder for plaintext DB reads
-    const userResult = await query( // FIX: access_token is still being read from the database in plaintext
-      'SELECT access_token FROM users WHERE id = $1',
-      [userId]
-    );
-
-    if (userResult.rows.length === 0) {
-      throw new Error('User not found');
-    }
-
-    const token = userResult.rows[0].access_token; // TODO: ENCRYPT access_token with AES-256-GCM before using plaintext DB values in production // FIX: mark plaintext token handling for remediation
+    const token = await AuthService.getGitHubAccessTokenForUser(userId);
 
     if (!token) {
       throw new Error('Access token missing - user must re-authenticate');

@@ -3,11 +3,13 @@ import axios from 'axios';
 import { query } from '../config/database.js';
 import { AutoFixer } from '../utils/auto-fixer.js';
 import { SecurityService } from './security.service.js';
+import { AuthService } from './auth.service.js';
 import { logger } from '../utils/logger.js';
 
 export class RemediationService {
-  static async runAutoRemediation(pipelineId, userId, accessToken, projectPath) {
+  static async runAutoRemediation(pipelineId, userId, projectPath) {
     try {
+      const accessToken = await AuthService.getGitHubAccessTokenForUser(userId);
       const pipelineResult = await query(
         `SELECT p.*, r.*
          FROM pipelines p

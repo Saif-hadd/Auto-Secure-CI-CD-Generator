@@ -6,10 +6,12 @@ import {
   getLatestScan
 } from '../controllers/security.controller.js';
 import { authenticateUser } from '../middleware/auth.middleware.js';
+import { requireCsrfProtection } from '../middleware/csrf.middleware.js';
 
 const router = express.Router();
 
 router.use(authenticateUser);
+router.use(requireCsrfProtection);
 
 router.post('/:pipelineId/scan', runSecurityScan);
 router.get('/:pipelineId/history', getScanHistory);

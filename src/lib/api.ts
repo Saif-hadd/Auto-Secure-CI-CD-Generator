@@ -1,6 +1,7 @@
 import type { User } from '../types/user';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+const CSRF_COOKIE_NAME = import.meta.env.VITE_CSRF_COOKIE_NAME || 'autosecure_csrf';
 
 interface Repository {
   id: string;
@@ -68,14 +69,13 @@ function normalizeUser(value: unknown): User {
   };
 }
 
-function normalizeAuthResponse(value: unknown): { user: User; token: string } {
+function normalizeAuthResponse(value: unknown): { user: User } {
   if (!isJsonObject(value)) {
     throw new Error('Invalid API response: auth payload must be an object');
   }
 
   return {
     user: normalizeUser(value.user),
-    token: parseString(value.token, 'token'),
   };
 }
 
@@ -90,27 +90,57 @@ function normalizeCurrentUserResponse(value: unknown): { user: User } {
 }
 
 export class ApiClient {
-  private static getAuthToken(): string | null {
-    return localStorage.getItem('auth_token');
+  private static getCookie(name: string): string | null {
+    const cookies = document.cookie
+      .split(';')
+      .map((cookie) => cookie.trim())
+      .filter(Boolean);
+
+    for (const cookie of cookies) {
+      const separatorIndex = cookie.indexOf('=');
+
+      if (separatorIndex === -1) {
+        continue;
+      }
+
+      const key = cookie.slice(0, separatorIndex);
+
+      if (key === name) {
+        return decodeURIComponent(cookie.slice(separatorIndex + 1));
+      }
+    }
+
+    return null;
+  }
+
+  private static isUnsafeMethod(method: string): boolean {
+    return !['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase());
   }
 
   private static async request<T>(
     endpoint: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    config: { csrfProtected?: boolean } = {}
   ): Promise<T> {
-    const token = this.getAuthToken();
+    const method = options.method || 'GET';
+    const shouldAttachCsrfToken = config.csrfProtected !== false && this.isUnsafeMethod(method);
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
 
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
+    if (shouldAttachCsrfToken) {
+      const csrfToken = this.getCookie(CSRF_COOKIE_NAME);
+
+      if (csrfToken) {
+        headers['X-CSRF-Token'] = csrfToken;
+      }
     }
 
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
       ...options,
       headers,
+      credentials: 'include',
     });
 
     if (!response.ok) {
@@ -121,10 +151,16 @@ export class ApiClient {
     return response.json();
   }
 
-  static async githubCallback(code: string) {
+  static async getGitHubAuthUrl() {
+    return this.request<{ url: string }>('/api/auth/github/url');
+  }
+
+  static async githubCallback(code: string, state: string) {
     const response = await this.request<unknown>('/api/auth/github/callback', {
       method: 'POST',
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({ code, state }),
+    }, {
+      csrfProtected: false
     });
 
     return normalizeAuthResponse(response);
@@ -134,6 +170,12 @@ export class ApiClient {
     const response = await this.request<unknown>('/api/auth/me');
 
     return normalizeCurrentUserResponse(response);
+  }
+
+  static async logout() {
+    return this.request<{ message: string }>('/api/auth/logout', {
+      method: 'POST'
+    });
   }
 
   static async syncRepositories() {

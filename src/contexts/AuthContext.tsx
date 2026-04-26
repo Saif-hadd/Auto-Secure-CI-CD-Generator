@@ -5,8 +5,8 @@ import type { User } from '../types/user';
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (code: string) => Promise<void>;
-  logout: () => void;
+  login: (code: string, state: string) => Promise<void>;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -20,37 +20,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const checkAuth = async (): Promise<void> => {
-    const token = localStorage.getItem('auth_token');
-    if (!token) {
-      setLoading(false);
-      return;
-    }
-
     try {
       const { user } = await ApiClient.getCurrentUser();
       setUser(user);
-    } catch (error) {
-      console.error('Auth check failed:', error);
-      localStorage.removeItem('auth_token');
+    } catch {
+      setUser(null);
     } finally {
       setLoading(false);
     }
   };
 
-  const login = async (code: string): Promise<void> => {
+  const login = async (code: string, state: string): Promise<void> => {
     try {
-      const { user, token } = await ApiClient.githubCallback(code);
-      localStorage.setItem('auth_token', token);
+      const { user } = await ApiClient.githubCallback(code, state);
       setUser(user);
+      window.history.replaceState({}, document.title, window.location.pathname);
     } catch (error) {
-      console.error('Login failed:', error);
       throw error;
     }
   };
 
-  const logout = () => {
-    localStorage.removeItem('auth_token');
-    setUser(null);
+  const logout = async (): Promise<void> => {
+    try {
+      await ApiClient.logout();
+    } finally {
+      setUser(null);
+    }
   };
 
   return (

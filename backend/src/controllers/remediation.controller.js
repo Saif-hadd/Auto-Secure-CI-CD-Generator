@@ -11,7 +11,6 @@ export const runRemediation = async (req, res) => {
     const result = await RemediationService.runAutoRemediation(
       pipelineId,
       req.user.id,
-      req.user.access_token,
       path
     );
 

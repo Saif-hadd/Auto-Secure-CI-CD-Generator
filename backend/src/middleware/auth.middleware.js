@@ -1,25 +1,32 @@
-import { query } from '../config/database.js';
+import { SessionService } from '../services/session.service.js';
+import { clearCsrfCookie, clearSessionCookie, getRequestCookies } from '../utils/cookies.js';
+import { env } from '../utils/env.js';
+import { logger } from '../utils/logger.js';
 
 export const authenticateUser = async (req, res, next) => {
   try {
-    const authHeader = req.headers.authorization;
+    const cookies = getRequestCookies(req);
+    const sessionToken = cookies[env.SESSION_COOKIE_NAME];
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Missing or invalid authorization header' });
+    if (!sessionToken) {
+      clearSessionCookie(res);
+      clearCsrfCookie(res);
+      return res.status(401).json({ error: 'Authentication required' });
     }
 
-    const userId = authHeader.substring(7);
+    const authenticatedSession = await SessionService.authenticateSession(sessionToken);
 
-    const result = await query('SELECT * FROM users WHERE id = $1', [userId]);
-
-    if (result.rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid user' });
+    if (!authenticatedSession) {
+      clearSessionCookie(res);
+      clearCsrfCookie(res);
+      return res.status(401).json({ error: 'Invalid or expired session' });
     }
 
-    req.user = result.rows[0];
+    req.session = authenticatedSession.session;
+    req.user = authenticatedSession.user;
     next();
   } catch (error) {
-    console.error('Auth middleware error:', error);
+    logger.error({ context: { path: req.originalUrl }, err: error }, 'Authentication middleware error');
     res.status(401).json({ error: 'Authentication failed' });
   }
 };

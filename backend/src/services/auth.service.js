@@ -1,19 +1,32 @@
 import axios from 'axios';
 import { query } from '../config/database.js';
+import { encrypt, decryptIfNeeded, isEncrypted } from '../utils/encryption.js';
+import { env } from '../utils/env.js';
 import { logger } from '../utils/logger.js';
 
 export class AuthService {
+  static sanitizeUser(user) {
+    return {
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      avatar_url: user.avatar_url,
+      github_id: user.github_id
+    };
+  }
+
   static async handleGitHubCallback(code) {
     try {
       const tokenResponse = await axios.post(
         'https://github.com/login/oauth/access_token',
         {
-          client_id: process.env.GITHUB_CLIENT_ID,
-          client_secret: process.env.GITHUB_CLIENT_SECRET,
+          client_id: env.GITHUB_CLIENT_ID,
+          client_secret: env.GITHUB_CLIENT_SECRET,
           code
         },
         {
-          headers: { Accept: 'application/json' }
+          headers: { Accept: 'application/json' },
+          timeout: 15000
         }
       );
 
@@ -41,7 +54,8 @@ export class AuthService {
         headers: {
           Authorization: `Bearer ${accessToken}`,
           Accept: 'application/vnd.github.v3+json'
-        }
+        },
+        timeout: 15000
       });
 
       const scopes = userResponse.headers['x-oauth-scopes'] || '';
@@ -52,6 +66,7 @@ export class AuthService {
       }
 
       const githubUser = userResponse.data;
+      const encryptedAccessToken = encrypt(accessToken);
       const existingUserResult = await query(
         'SELECT * FROM users WHERE github_id = $1',
         [githubUser.id]
@@ -63,16 +78,16 @@ export class AuthService {
           `UPDATE users
            SET username = $1, email = $2, avatar_url = $3, access_token = $4, updated_at = NOW()
            WHERE github_id = $5
-           RETURNING *`, // TODO: ENCRYPT access_token with AES-256-GCM before writing to the DB in production // FIX: mark plaintext token storage for remediation
-          [githubUser.login, githubUser.email, githubUser.avatar_url, accessToken, githubUser.id]
+           RETURNING id, github_id, username, email, avatar_url`,
+          [githubUser.login, githubUser.email, githubUser.avatar_url, encryptedAccessToken, githubUser.id]
         );
         user = updateResult.rows[0];
       } else {
         const insertResult = await query(
           `INSERT INTO users (github_id, username, email, avatar_url, access_token)
            VALUES ($1, $2, $3, $4, $5)
-           RETURNING *`, // TODO: ENCRYPT access_token with AES-256-GCM before writing to the DB in production // FIX: mark plaintext token storage for remediation
-          [githubUser.id, githubUser.login, githubUser.email, githubUser.avatar_url, accessToken]
+           RETURNING id, github_id, username, email, avatar_url`,
+          [githubUser.id, githubUser.login, githubUser.email, githubUser.avatar_url, encryptedAccessToken]
         );
         user = insertResult.rows[0];
       }
@@ -80,14 +95,7 @@ export class AuthService {
       logger.info({ context: { userId: user.id, tokenPersisted: true } }, 'GitHub user persisted'); // FIX: avoid re-reading the stored token field while keeping structured audit logging
 
       return {
-        user: {
-          id: user.id,
-          username: user.username,
-          email: user.email,
-          avatar_url: user.avatar_url,
-          github_id: user.github_id
-        },
-        token: user.id
+        user: this.sanitizeUser(user)
       };
     } catch (error) {
       logger.error({ context: {}, err: error }, 'GitHub OAuth error'); // FIX: replace console logging with structured logger
@@ -97,9 +105,35 @@ export class AuthService {
 
   static async getUserById(userId) {
     const result = await query(
-      'SELECT id, github_id, username, email, avatar_url, access_token, created_at FROM users WHERE id = $1', // TODO: ENCRYPT access_token with AES-256-GCM before reading from the DB in production // FIX: mark plaintext token access for remediation
+      'SELECT id, github_id, username, email, avatar_url, created_at FROM users WHERE id = $1',
       [userId]
     );
     return result.rows.length > 0 ? result.rows[0] : null;
+  }
+
+  static async getGitHubAccessTokenForUser(userId) {
+    const result = await query(
+      'SELECT access_token FROM users WHERE id = $1',
+      [userId]
+    );
+
+    if (result.rows.length === 0) {
+      throw new Error('User not found');
+    }
+
+    const storedToken = result.rows[0].access_token;
+
+    if (!storedToken) {
+      throw new Error('Access token missing - user must re-authenticate');
+    }
+
+    if (!isEncrypted(storedToken)) {
+      await query(
+        'UPDATE users SET access_token = $1, updated_at = NOW() WHERE id = $2',
+        [encrypt(storedToken), userId]
+      );
+    }
+
+    return decryptIfNeeded(storedToken);
   }
 }

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:16-alpine
@@ -27,10 +25,22 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3001:3001"
-    env_file:
-      - ./backend/.env
     environment:
-      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: "3001"
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?TOKEN_ENCRYPTION_KEY is required}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      ALLOWED_SCAN_BASE_DIR: ${ALLOWED_SCAN_BASE_DIR:-/tmp}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-autosecure_session}
+      CSRF_COOKIE_NAME: ${CSRF_COOKIE_NAME:-autosecure_csrf}
+      OAUTH_STATE_COOKIE_NAME: ${OAUTH_STATE_COOKIE_NAME:-autosecure_oauth_state}
+      COOKIE_SAME_SITE: ${COOKIE_SAME_SITE:-lax}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-168}
+      OAUTH_STATE_TTL_MINUTES: ${OAUTH_STATE_TTL_MINUTES:-10}
     depends_on:
       db:
         condition: service_healthy

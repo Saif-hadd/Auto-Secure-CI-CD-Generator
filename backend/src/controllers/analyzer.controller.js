@@ -1,4 +1,5 @@
 import { AnalyzerService } from '../services/analyzer.service.js';
+import { logger } from '../utils/logger.js';
 
 export const analyzeYAML = async (req, res) => {
   try {
@@ -11,7 +12,7 @@ export const analyzeYAML = async (req, res) => {
     const analysis = await AnalyzerService.analyzeYAML(yaml);
     res.json(analysis);
   } catch (error) {
-    console.error('Analyze YAML error:', error);
+    logger.error({ err: error }, 'Analyze YAML error');
     res.status(500).json({ error: error.message });
   }
 };
