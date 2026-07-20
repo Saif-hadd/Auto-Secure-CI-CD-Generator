@@ -6,7 +6,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white)](#prerequisites)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](#tech-stack)
 [![TypeScript](https://img.shields.io/badge/TypeScript-blue?logo=typescript&logoColor=white)](#tech-stack)
-[![Supabase](https://img.shields.io/badge/Database-Supabase-3ECF8E?logo=supabase&logoColor=white)](#tech-stack)
+[![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL-4169E1?logo=postgresql&logoColor=white)](#tech-stack)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#docker)
 
 ---
@@ -68,7 +68,7 @@ Setting up a secure CI/CD pipeline is tedious and easy to get wrong. **Auto Secu
 |---|---|
 | **Frontend** | React 18 · TypeScript · Tailwind CSS · Lucide React · Vite |
 | **Backend** | Node.js · Express · clean architecture (controllers / services / utils) |
-| **Database** | PostgreSQL via Supabase, with Row Level Security (RLS) and automatic migrations |
+| **Database** | PostgreSQL, with Row Level Security (RLS) and SQL migration scripts |
 | **DevOps** | Docker & Docker Compose · Nginx · multi-stage builds |
 
 ---
@@ -79,7 +79,7 @@ Setting up a secure CI/CD pipeline is tedious and easy to get wrong. **Auto Secu
 flowchart LR
     User((User)) -->|OAuth login| Frontend[React Frontend]
     Frontend -->|REST API| Backend[Node.js / Express API]
-    Backend --> Supabase[(PostgreSQL / Supabase)]
+    Backend --> Postgres[(PostgreSQL)]
     Backend -->|OAuth + repo access| GitHub[(GitHub API)]
     Backend -->|generates & pushes| Pipeline[.github/workflows/secure-pipeline.yml]
 ```
@@ -90,7 +90,7 @@ backend/
 ├── src/
 │   ├── server.js              # Express app setup
 │   ├── config/
-│   │   └── supabase.js        # Supabase client
+│   │   └── db.js               # PostgreSQL connection pool
 │   ├── controllers/           # Request handlers
 │   │   ├── auth.controller.js
 │   │   ├── repo.controller.js
@@ -126,7 +126,6 @@ src/
 │   ├── PipelineGenerator.tsx
 │   └── AnalyzerPage.tsx
 └── lib/
-    ├── supabase.ts
     └── api.ts
 ```
 
@@ -137,7 +136,7 @@ src/
 - **Node.js 18+** and npm
 - **Docker** and Docker Compose *(optional, for containerized setup)*
 - A **GitHub account**
-- A **Supabase** account/project
+- A **PostgreSQL** database (local install, or a managed instance)
 
 ---
 
@@ -163,9 +162,17 @@ cd auto-secure-cicd-generator
 
 3. Save your **Client ID** and **Client Secret** — you'll need them below.
 
-### 3. Set up Supabase
+### 3. Set up PostgreSQL
 
-Create a Supabase project and note your project URL and API keys — these populate the environment variables in the next step.
+Create a local database (or use a managed PostgreSQL instance) and run the migration scripts to set up the schema:
+
+```bash
+createdb cicd_generator
+cd backend
+npm run migrate
+```
+
+Note the connection details (host, port, database name, user, password) — you'll need them for `DATABASE_URL` in the next step.
 
 ### 4. Configure environment variables
 
@@ -177,8 +184,6 @@ cp .env.example .env
 VITE_API_URL=http://localhost:3001
 VITE_GITHUB_CLIENT_ID=<your-github-client-id>
 VITE_GITHUB_REDIRECT_URI=http://localhost:5173
-VITE_SUPABASE_URL=<your-supabase-project-url>
-VITE_SUPABASE_ANON_KEY=<your-supabase-anon-key>
 ```
 
 **Backend (`backend/.env`)**
@@ -329,9 +334,9 @@ docker-compose up --build
 <details>
 <summary><strong>Database connection issues</strong></summary>
 
-- Verify your Supabase URL and API keys
+- Verify PostgreSQL is running and `DATABASE_URL` is correct
 - Check that RLS policies are enabled
-- Confirm migrations ran successfully
+- Confirm migrations ran successfully (`npm run migrate`)
 </details>
 
 <details>
