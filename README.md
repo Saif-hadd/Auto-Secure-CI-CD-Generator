@@ -40,56 +40,12 @@ Setting up a secure CI/CD pipeline is tedious and easy to get wrong. **Auto Secu
 ## ✨ Features
 
 ### Core Functionality
-|
- Feature 
-|
- Description 
-|
-|
----
-|
----
-|
-|
-**
-GitHub OAuth Integration
-**
-|
- Connect your GitHub account securely in one click 
-|
-|
-**
-Smart Stack Detection
-**
-|
- Automatically detects Node.js, Python, Java, Go, Rust, or PHP projects 
-|
-|
-**
-Secure Pipeline Generation
-**
-|
- Generates GitHub Actions workflows with built-in security controls 
-|
-|
-**
-Pipeline Templates
-**
-|
- Choose between 
-**
-Basic
-**
-, 
-**
-Advanced
-**
-, or 
-**
-Secure
-**
- (full DevSecOps) 
-|
+| Feature | Description |
+|---|---|
+| **GitHub OAuth Integration** | Connect your GitHub account securely in one click |
+| **Smart Stack Detection** | Automatically detects Node.js, Python, Java, Go, Rust, or PHP projects |
+| **Secure Pipeline Generation** | Generates GitHub Actions workflows with built-in security controls |
+| **Pipeline Templates** | Choose between **Basic**, **Advanced**, or **Secure** (full DevSecOps) |
 
 ### Security Features
 - 🛡️ **SAST** — Static Application Security Testing
@@ -108,44 +64,12 @@ Secure
 
 ## 🛠️ Tech Stack
 
-|
- Layer 
-|
- Technologies 
-|
-|
----
-|
----
-|
-|
-**
-Frontend
-**
-|
- React 18 · TypeScript · Tailwind CSS · Lucide React · Vite 
-|
-|
-**
-Backend
-**
-|
- Node.js · Express · clean architecture (controllers / services / utils) 
-|
-|
-**
-Database
-**
-|
- PostgreSQL via Supabase, with Row Level Security (RLS) and automatic migrations 
-|
-|
-**
-DevOps
-**
-|
- Docker & Docker Compose · Nginx · multi-stage builds 
-|
+| Layer | Technologies |
+|---|---|
+| **Frontend** | React 18 · TypeScript · Tailwind CSS · Lucide React · Vite |
+| **Backend** | Node.js · Express · clean architecture (controllers / services / utils) |
+| **Database** | PostgreSQL via Supabase, with Row Level Security (RLS) and automatic migrations |
+| **DevOps** | Docker & Docker Compose · Nginx · multi-stage builds |
 
 ---
 
@@ -222,7 +146,7 @@ src/
 ### 1. Clone the repository
 
 ```bash
-git clone 
+git clone <repository-url>
 cd auto-secure-cicd-generator
 ```
 
@@ -296,26 +220,10 @@ npm run dev
 npm run dev
 ```
 
-|
- Service 
-|
- URL 
-|
-|
----
-|
----
-|
-|
- Frontend 
-|
- http://localhost:5173 
-|
-|
- Backend API 
-|
- http://localhost:3001 
-|
+| Service | URL |
+|---|---|
+| Frontend | http://localhost:5173 |
+| Backend API | http://localhost:3001 |
 
 **Option B — Docker**
 
@@ -323,26 +231,10 @@ npm run dev
 docker-compose up --build
 ```
 
-|
- Service 
-|
- URL 
-|
-|
----
-|
----
-|
-|
- Frontend 
-|
- http://localhost:80 
-|
-|
- Backend API 
-|
- http://localhost:3001 
-|
+| Service | URL |
+|---|---|
+| Frontend | http://localhost:80 |
+| Backend API | http://localhost:3001 |
 
 ---
 
@@ -359,187 +251,43 @@ docker-compose up --build
 ## 🔌 API Reference
 
 ### Authentication
-|
- Method 
-|
- Endpoint 
-|
- Description 
-|
-|
----
-|
----
-|
----
-|
-|
-`POST`
-|
-`/api/auth/github/callback`
-|
- Handle GitHub OAuth callback 
-|
-|
-`GET`
-|
-`/api/auth/me`
-|
- Get current authenticated user 
-|
-|
-`POST`
-|
-`/api/auth/logout`
-|
- Logout user 
-|
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/auth/github/callback` | Handle GitHub OAuth callback |
+| `GET` | `/api/auth/me` | Get current authenticated user |
+| `POST` | `/api/auth/logout` | Logout user |
 
 ### Repositories
-|
- Method 
-|
- Endpoint 
-|
- Description 
-|
-|
----
-|
----
-|
----
-|
-|
-`GET`
-|
-`/api/repos`
-|
- List user repositories 
-|
-|
-`POST`
-|
-`/api/repos/sync`
-|
- Sync repositories from GitHub 
-|
-|
-`GET`
-|
-`/api/repos/:repoId`
-|
- Get repository details 
-|
-|
-`POST`
-|
-`/api/repos/:repoId/detect-stack`
-|
- Detect tech stack for a repo 
-|
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/repos` | List user repositories |
+| `POST` | `/api/repos/sync` | Sync repositories from GitHub |
+| `GET` | `/api/repos/:repoId` | Get repository details |
+| `POST` | `/api/repos/:repoId/detect-stack` | Detect tech stack for a repo |
 
 ### Pipelines
-|
- Method 
-|
- Endpoint 
-|
- Description 
-|
-|
----
-|
----
-|
----
-|
-|
-`POST`
-|
-`/api/pipelines/generate`
-|
- Generate a pipeline 
-|
-|
-`GET`
-|
-`/api/pipelines/repo/:repoId`
-|
- Get pipelines for a repository 
-|
-|
-`POST`
-|
-`/api/pipelines/:pipelineId/push`
-|
- Push pipeline to GitHub 
-|
-|
-`GET`
-|
-`/api/pipelines/:pipelineId/security`
-|
- Get the security dashboard 
-|
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/pipelines/generate` | Generate a pipeline |
+| `GET` | `/api/pipelines/repo/:repoId` | Get pipelines for a repository |
+| `POST` | `/api/pipelines/:pipelineId/push` | Push pipeline to GitHub |
+| `GET` | `/api/pipelines/:pipelineId/security` | Get the security dashboard |
 
 ### Analyzer
-|
- Method 
-|
- Endpoint 
-|
- Description 
-|
-|
----
-|
----
-|
----
-|
-|
-`POST`
-|
-`/api/analyzer/analyze`
-|
- Analyze an existing YAML pipeline 
-|
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/analyzer/analyze` | Analyze an existing YAML pipeline |
 
 ---
 
 ## 🗄️ Database Schema
 
-|
- Table 
-|
- Purpose 
-|
-|
----
-|
----
-|
-|
-`users`
-|
- GitHub user information, encrypted access tokens 
-|
-|
-`repositories`
-|
- Repository metadata and detected tech stack (JSONB) 
-|
-|
-`pipelines`
-|
- Generated pipeline YAML, enabled security features, status 
-|
-|
-`security_scans`
-|
- Scan results: vulnerability counts and risk levels 
-|
+| Table | Purpose |
+|---|---|
+| `users` | GitHub user information, encrypted access tokens |
+| `repositories` | Repository metadata and detected tech stack (JSONB) |
+| `pipelines` | Generated pipeline YAML, enabled security features, status |
+| `security_scans` | Scan results: vulnerability counts and risk levels |
 
 ---
 
